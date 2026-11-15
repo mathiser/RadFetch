@@ -14,13 +14,15 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Iterator
 
+import csv
+import io
 import secrets
 from dataclasses import dataclass
 from importlib import resources
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
@@ -154,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def job(job_id: uuid.UUID, conn=Depends(db)):
         row = found(store.get_job(conn, job_id))
         row["events"] = store.job_events(conn, job_id)
+        row["runs"] = store.job_runs(conn, job_id)
         return row
 
     @app.post("/jobs/{job_id}/cancel")
@@ -190,6 +193,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/batches/{batch_id}", dependencies=guarded)
     def batch(batch_id: uuid.UUID, conn=Depends(db)):
         return found(store.get_batch(conn, batch_id))
+
+    @app.get("/batches/{batch_id}/jobs.csv", dependencies=guarded)
+    def batch_csv(batch_id: uuid.UUID, conn=Depends(db)):
+        """One row per job: what ran, what failed and why. For checking a batch in a spreadsheet."""
+        found(store.get_batch(conn, batch_id))
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["accession_number", "state", "error", "study_instance_uid", "job_id", "updated_at"])
+        for j in store.batch_jobs(conn, batch_id):
+            # A leading = + - @ would be run as a formula by spreadsheet programs.
+            cells = [j["accession_number"], j["state"], j["error"] or "", j["study_instance_uid"] or "", j["id"],
+                     j["updated_at"].isoformat()]
+            writer.writerow(["'" + c if isinstance(c, str) and c[:1] in "=+-@" else c for c in cells])
+        return Response(
+            out.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="batch-{batch_id}.csv"'},
+        )
 
     @app.post("/batches/{batch_id}/pause")
     def pause(batch_id: uuid.UUID, conn=Depends(db), user: User = Depends(operator)):

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
 import socket
-import subprocess
 
 import pytest
 from pynetdicom import AE, AllStoragePresentationContexts, evt
@@ -21,30 +19,6 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-@pytest.fixture
-def pki(tmp_path, settings):
-    """A CA plus one certificate valid for 127.0.0.1, used by both ends."""
-    if not shutil.which("openssl"):
-        pytest.skip("openssl not installed")
-    d = tmp_path / "pki"
-    d.mkdir()
-
-    def run(*args):
-        subprocess.run(["openssl", *args], cwd=d, check=True, capture_output=True)
-
-    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=test-ca",
-        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-        "-keyout", "ca.key", "-out", "ca.pem")
-    (d / "ext").write_text("subjectAltName=IP:127.0.0.1,DNS:localhost\n")
-    run("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=node", "-keyout", "node.key", "-out", "node.csr")
-    run("x509", "-req", "-in", "node.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
-        "-days", "2", "-extfile", "ext", "-out", "node.pem")
-    settings.tls_ca_file, settings.tls_cert_file, settings.tls_key_file = d / "ca.pem", d / "node.pem", d / "node.key"
-    settings.pacs_host = "127.0.0.1"
-    settings.acse_timeout_s = settings.dimse_timeout_s = settings.network_timeout_s = 5
-    return settings
 
 
 def test_query_and_retrieve_over_tls(pki, tmp_path):

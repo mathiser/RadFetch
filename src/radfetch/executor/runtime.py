@@ -35,6 +35,10 @@ class Runtime(Protocol):
         """Handle of the container started for this run, if it still exists (used after a restart)."""
         ...
 
+    def image_digest(self, handle: str) -> str | None:
+        """Immutable identifier of the image the container actually runs, for traceability."""
+        ...
+
     def exit_code(self, handle: str) -> int | None:
         """None while running, otherwise the exit code."""
         ...

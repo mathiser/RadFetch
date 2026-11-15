@@ -68,6 +68,7 @@ def test_run_to_completion(docker_runtime, settings):
     handle = docker_runtime.start(spec)
     try:
         assert docker_runtime.find(spec.run_id) == handle
+        assert "sha256:" in docker_runtime.image_digest(handle)
         assert wait(docker_runtime, handle) == 0
         assert docker_runtime.logs(handle).strip() == b"hello"
         assert (spec.output_dir / "listing.txt").read_text().strip() == "a.dcm"

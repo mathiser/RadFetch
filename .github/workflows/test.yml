@@ -47,6 +47,7 @@ jobs:
         env:
           RADFETCH_TEST_DATABASE_URL: postgresql://radfetch:radfetch@localhost:5432/radfetch_test
           RADFETCH_TEST_ORTHANC_URL: http://localhost:8042
+          RADFETCH_TEST_ORTHANC_TLS: "1" # starts its own Orthanc with mutual TLS
       - name: Build image
         run: docker build -t radfetch:local .
       - name: Validate example flows inside the image

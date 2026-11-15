@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -120,6 +121,7 @@ class Executor:
         except RuntimeError_ as exc:
             self._fail_run(job, flow, run, str(exc), None)
             return None
+        store.set_run_image_digest(self.conn, run["id"], self.runtime.image_digest(handle))
         return run, handle
 
     def _prepare(self, job_id, run_dir: Path) -> tuple[Path, Path]:
@@ -186,6 +188,7 @@ class Executor:
 
             self._save_logs(handle, run_dir)
             if code == 0:
+                self._write_manifest(run_id, run_dir)
                 destinations = [d.model_dump() for d in flow.destinations]
                 store.run_succeeded(self.conn, job_id, run_id, self.owner, destinations)
                 log.info("job %s: run %s succeeded", job_id, run_id)
@@ -202,6 +205,14 @@ class Executor:
             self.conn, job["id"], run["id"], self.owner, error, exit_code, retry, self.s.backoff_s(run["attempt"])
         )
         log.warning("job %s: run %s failed (%s)%s", job["id"], run["id"], error, ", will retry" if retry else "")
+
+    def _write_manifest(self, run_id, run_dir: Path) -> None:
+        """Put radfetch.json next to the results so they carry their own provenance."""
+        try:
+            manifest = store.run_manifest(self.conn, run_id)
+            (run_dir / "out" / "radfetch.json").write_text(json.dumps(manifest, indent=2, default=str))
+        except OSError:
+            log.exception("could not write the run manifest")
 
     def _save_logs(self, handle: str, run_dir: Path) -> None:
         try:

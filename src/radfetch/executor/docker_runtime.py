@@ -67,6 +67,15 @@ class DockerRuntime:
         found = self.client.containers.list(all=True, filters={"label": f"{LABEL_RUN}={run_id}"})
         return found[0].id if found else None
 
+    def image_digest(self, handle: str) -> str | None:
+        try:
+            image = self.client.containers.get(handle).image
+        except DockerException:
+            return None
+        # A registry digest when the image was pulled; otherwise the local image id.
+        digests = image.attrs.get("RepoDigests") or []
+        return digests[0] if digests else image.id
+
     def exit_code(self, handle: str) -> int | None:
         try:
             container = self.client.containers.get(handle)

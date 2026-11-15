@@ -43,7 +43,7 @@
   .bar select { width: auto; }
   #msg { min-height: 18px; font-size: 12px; margin-top: 8px; }
   #detail pre { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
-  body.viewer form, body.viewer td button { display: none; }
+  body.viewer form, body.viewer td button:not(.csv) { display: none; }
   .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 </head>
@@ -125,6 +125,17 @@ async function api(path, options = {}) {
 const post = (path, body) => api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 const when = (iso) => new Date(iso).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
 
+async function downloadCsv(b) {
+  // A plain link could not send the token, so fetch it and hand the browser a blob.
+  let token = null;
+  try { token = sessionStorage.getItem("radfetch-token"); } catch {}
+  const r = await fetch(`/batches/${b.id}/jobs.csv`, { headers: token ? { authorization: "Bearer " + token } : {} });
+  if (!r.ok) throw new Error("could not download the CSV");
+  const a = el("a", { href: URL.createObjectURL(await r.blob()), download: `${b.name}.csv` });
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 function say(text, tone = "ok") { $("msg").className = tone; $("msg").textContent = text; }
 
 async function act(fn, done) {
@@ -156,6 +167,7 @@ function renderBatches(batches) {
         el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/${b.paused ? "resume" : "pause"}`)) }, b.paused ? "Resume" : "Pause"), " ",
         el("button", { className: "small", onclick: () => confirm(`Cancel batch "${b.name}"?`) && act(() => post(`/batches/${b.id}/cancel`)) }, "Cancel"));
     }
+    buttons.append(" ", el("button", { className: "small csv", onclick: () => act(() => downloadCsv(b)) }, "CSV"));
     if (b.jobs.failed) {
       buttons.append(" ", el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/retry-failed`)) }, "Retry failed"));
     }
@@ -190,7 +202,11 @@ async function showJob() {
     const detail = Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : "";
     lines.push(`${when(e.at)}  ${e.kind}${detail}`);
   }
-  $("detail-body").textContent = lines.filter((l, i) => l || i === 3).join("\n");
+  for (const r of j.runs) {
+    lines.push("", `run ${r.attempt}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`,
+      r.image_digest ? `  image ${r.image_digest}` : "");
+  }
+  $("detail-body").textContent = lines.filter((l, i) => l || i >= 3).join("\n");
   $("detail").hidden = false;
 }
 

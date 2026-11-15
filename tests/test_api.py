@@ -19,6 +19,11 @@ def test_api(conn, settings):
         bid = b.json()["id"]
         assert [(x["name"], x["jobs"]) for x in client.get("/batches").json()] == [("trial", {"queued": 3})]
         assert "<title>RadFetch</title>" in client.get("/").text
+        conn.execute("update jobs set error = '=cmd()' where accession_number = 'B'")
+        rows = client.get(f"/batches/{bid}/jobs.csv").text.splitlines()
+        assert rows[0] == "accession_number,state,error,study_instance_uid,job_id,updated_at" and len(rows) == 4
+        assert rows[2].startswith("B,queued,'=cmd(),")  # formula neutralised
+        assert client.get(f"/jobs/{job['id']}").json()["runs"] == []
         assert client.post(f"/batches/{bid}/pause").json()["paused"] is True
         assert client.post(f"/batches/{bid}/resume").json()["paused"] is False
         assert len(client.get("/jobs", params={"batch_id": bid}).json()) == 3

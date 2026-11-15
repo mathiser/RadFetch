@@ -42,6 +42,9 @@ class Janitor:
                 if self._disk_fraction() < self.s.disk_high_watermark:
                     break
                 evicted += self._evict([series_uid], 0)
+        promoted = store.promote_ready_jobs(self.conn)
+        if promoted:
+            log.warning("%d job(s) had all series staged but were still waiting; moved to ready", promoted)
         purged = self._purge_runs()
         if evicted or purged:
             log.info("evicted %d series, purged %d run directories", evicted, purged)

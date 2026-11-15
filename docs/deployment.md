@@ -84,4 +84,3 @@ Do these with the PACS team watching their side.
 
 - Real GPU access. `tests/test_docker_runtime.py::test_real_gpu_is_visible_in_container` checks it and runs only on a host with the NVIDIA runtime, so run the suite once on the GPU host.
 - Any vendor PACS: retrieval is tested against Orthanc and an in-memory fake only.
-- C-MOVE over TLS.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 
@@ -63,6 +64,11 @@ def test_one_off_end_to_end(conn, settings, pacs, runtime, tmp_path):
     row = store.get_job(conn, job)
     assert row["state"] == "done" and row["flow_version"] == "3"
     assert (tmp_path / "dest" / str(job) / "result.txt").read_text() == "12 instances"
+    manifest = json.loads((tmp_path / "dest" / str(job) / "radfetch.json").read_text())
+    assert manifest["accession_number"] == "ACC0001" and manifest["flow_version"] == "3"
+    assert manifest["image_digest"] == "registry.example/seg@sha256:abc"
+    assert manifest["input_series"] == [
+        {"series_instance_uid": "1.2.1.1", "study_instance_uid": "1.2.1", "instances": 12}]
     kinds = [e["kind"] for e in store.job_events(conn, job)]
     assert kinds == ["submitted", "resolved", "ready", "run_started", "run_succeeded", "done"]
 
@@ -491,3 +497,11 @@ def test_failed_jobs_not_kept_by_default(conn, settings, pacs):
     run_dir = settings.runs_dir / str(store.latest_run(conn, job)["id"])
     Janitor(conn, settings, disk_fraction=lambda: 0.1).sweep()
     assert not (settings.cache_dir / "1.2.1.1").exists() and not run_dir.exists()
+
+
+def test_janitor_rescues_job_whose_promotion_was_missed(conn, settings, pacs):
+    job = one_off(conn)
+    drain(make_gateway(conn, pacs, settings))
+    conn.execute("update jobs set state = 'retrieving' where id = %s", (job,))  # as if the promotion was lost
+    Janitor(conn, settings, disk_fraction=lambda: 0.1).sweep()
+    assert state(conn, job) == "ready"

@@ -71,6 +71,12 @@ results written to `/output`, exit code 0 on success, no network.
 `RADFETCH_JOB_ID`, `RADFETCH_ACCESSION_NUMBER`, `RADFETCH_STUDY_INSTANCE_UID`
 and `RADFETCH_FLOW` are set in the environment.
 
+## Traceability
+
+- Every run records the image it actually used as an immutable digest, not just the tag in the flow file. `GET /jobs/<id>` lists a job's runs with it, and the UI shows it in the job history.
+- A successful run gets a `radfetch.json` in its output: job, accession number, flow and version, image digest, and the input series with instance counts. It travels with `directory` deliveries; `dicom` and `stow` deliveries skip it like any non-DICOM file.
+- `GET /batches/<id>/jobs.csv` (the CSV button in the UI) lists every job of a batch with its state and error, for checking a batch in a spreadsheet.
+
 ## Retrying
 
 `POST /jobs/<id>/retry` (or the Retry button, or `radfetch retry <id>`) restarts a
@@ -197,6 +203,7 @@ Use a separate scratch database if the stack holds real jobs: the tests drop eve
 The Docker runtime tests run only when a Docker daemon is reachable.
 `scripts/smoke.sh` brings the whole Compose stack up against the fake PACS, runs a
 `gpu: true` flow with the fake GPU, and checks the results; CI runs it on every push.
+With `RADFETCH_TEST_ORTHANC_TLS=1` it starts an Orthanc with mutual TLS and tests C-MOVE over it.
 With `RADFETCH_TEST_ORTHANC_URL` set, the suite also runs against a real Orthanc
 (all three retrieve modes and both DICOM delivery types).
 `.github/workflows/test.yml` runs the suite, builds the image and validates the

@@ -461,6 +461,51 @@ def create_run(conn: Conn, job_id: uuid.UUID, image: str) -> Row:
     return run
 
 
+def set_run_image_digest(conn: Conn, run_id: uuid.UUID, digest: str | None) -> None:
+    conn.execute("update runs set image_digest = %s where id = %s", (digest, run_id))
+
+
+def job_runs(conn: Conn, job_id: uuid.UUID) -> list[Row]:
+    return conn.execute(
+        "select id, attempt, state, image, image_digest, exit_code, error, started_at, finished_at"
+        " from runs where job_id = %s order by attempt",
+        (job_id,),
+    ).fetchall()
+
+
+def run_manifest(conn: Conn, run_id: uuid.UUID) -> dict[str, Any]:
+    """Everything needed to say later what produced a result: inputs, flow version and exact image."""
+    row = conn.execute(
+        "select j.id as job_id, j.accession_number, j.study_instance_uid, j.flow, j.flow_version, j.source,"
+        " j.requested_by, r.id as run_id, r.attempt, r.image, r.image_digest, r.started_at"
+        " from runs r join jobs j on j.id = r.job_id where r.id = %s",
+        (run_id,),
+    ).fetchone()
+    series = conn.execute(
+        "select r.series_instance_uid, r.study_instance_uid, r.received_instances as instances"
+        " from job_series js join retrievals r using (series_instance_uid) where js.job_id = %s order by 1",
+        (row["job_id"],),
+    ).fetchall()
+    return {**row, "input_series": series}
+
+
+def promote_ready_jobs(conn: Conn) -> int:
+    """Safety net: move any job to 'ready' whose series are all staged but that is still 'retrieving'."""
+    with conn.transaction():
+        rows = conn.execute(_PROMOTE_READY.format(filter="true")).fetchall()
+        for row in rows:
+            log_event(conn, row["id"], "ready", via="reconciler")
+        return len(rows)
+
+
+def batch_jobs(conn: Conn, batch_id: uuid.UUID) -> list[Row]:
+    return conn.execute(
+        "select accession_number, state, error, study_instance_uid, id, updated_at from jobs"
+        " where batch_id = %s order by created_at, accession_number",
+        (batch_id,),
+    ).fetchall()
+
+
 def finish_run(conn: Conn, run_id: uuid.UUID, state: str, exit_code: int | None = None, error: str | None = None) -> None:
     conn.execute(
         "update runs set state = %s, exit_code = %s, error = %s, finished_at = now()"
