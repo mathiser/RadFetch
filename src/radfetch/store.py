@@ -876,3 +876,42 @@ def revoke_token(conn: Conn, name: str) -> bool:
         if cur.rowcount:
             log_event(conn, None, "token_revoked", name=name)
         return cur.rowcount == 1
+
+
+# --- notifications ---------------------------------------------------------------------------
+
+
+def enqueue_notification(conn: Conn, kind: str, ref: uuid.UUID | None = None, **detail: Any) -> None:
+    conn.execute("insert into notifications (kind, ref, detail) values (%s, %s, %s)", (kind, ref, Jsonb(detail)))
+
+
+def claim_notification(conn: Conn, owner: str, lease_s: float) -> Row | None:
+    return conn.execute(
+        """
+        update notifications set lease_owner = %(owner)s,
+                                 lease_expires_at = now() + make_interval(secs => %(lease)s),
+                                 attempts = attempts + 1
+        where id = (
+            select id from notifications
+            where state = 'pending' and not_before <= now()
+              and (lease_expires_at is null or lease_expires_at < now())
+            order by id for update skip locked limit 1)
+        returning *
+        """,
+        {"owner": owner, "lease": lease_s},
+    ).fetchone()
+
+
+def finish_notification(conn: Conn, notification_id: int, state: str, error: str | None = None) -> None:
+    conn.execute(
+        "update notifications set state = %s, error = %s, lease_owner = null, lease_expires_at = null where id = %s",
+        (state, error, notification_id),
+    )
+
+
+def retry_notification(conn: Conn, notification_id: int, error: str, delay_s: float) -> None:
+    conn.execute(
+        "update notifications set error = %s, lease_owner = null, lease_expires_at = null,"
+        " not_before = now() + make_interval(secs => %s) where id = %s",
+        (error, delay_s, notification_id),
+    )

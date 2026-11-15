@@ -99,6 +99,18 @@ class Settings(BaseSettings):
     # When set, every endpoint except /healthz requires "Authorization: Bearer <token>".
     api_token: str | None = None
 
+    # --- Notifications --------------------------------------------------------
+    # POST a JSON message here when a one-off or pushed job fails, a batch finishes, or the
+    # PACS becomes unreachable. The body has a "text" field, which Slack-compatible incoming
+    # webhooks display as is. Empty turns notifications off.
+    notify_webhook_url: str = ""
+    # Off by default because the webhook usually leaves the hospital network: messages then
+    # carry no accession numbers and no error text (which can contain them), only ids.
+    notify_include_identifiers: bool = False
+    # Base URL of the UI, to put a link in messages, e.g. https://radfetch.example
+    public_url: str = ""
+    notify_max_attempts: int = 6
+
     # --- Janitor -----------------------------------------------------------
     cache_ttl_hours: float = 72
     run_ttl_hours: float = 168

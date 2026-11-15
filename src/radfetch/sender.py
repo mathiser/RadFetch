@@ -16,7 +16,7 @@ from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 from pynetdicom import AE
 
-from radfetch import store, tls
+from radfetch import notify, store, tls
 from radfetch.config import Settings
 from radfetch.loop import run_steps
 
@@ -126,6 +126,32 @@ class Sender:
         run_steps(self.step, self.s.idle_sleep_s, self._sleep)
 
     def step(self) -> bool:
+        return self.deliver_one() or self.notify_one()
+
+    def notify_one(self) -> bool:
+        n = store.claim_notification(self.conn, self.owner, self.s.lease_s)
+        if n is None:
+            return False
+        if not self.s.notify_webhook_url:
+            store.finish_notification(self.conn, n["id"], "skipped")
+            return True
+        message = notify.build_message(self.conn, self.s, n)
+        if message is None:
+            store.finish_notification(self.conn, n["id"], "skipped")
+            return True
+        try:
+            notify.send(self.s, message)
+        except notify.NotifyError as exc:
+            if n["attempts"] >= self.s.notify_max_attempts:
+                store.finish_notification(self.conn, n["id"], "failed", str(exc))
+            else:
+                store.retry_notification(self.conn, n["id"], str(exc), self.s.backoff_s(n["attempts"]))
+            log.warning("notification %s not delivered: %s", n["id"], exc)
+            return True
+        store.finish_notification(self.conn, n["id"], "sent")
+        return True
+
+    def deliver_one(self) -> bool:
         d = store.claim_delivery(self.conn, self.owner, self.s.lease_s)
         if d is None:
             return False

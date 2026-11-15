@@ -145,6 +145,34 @@ def fake_pacs(
         time.sleep(3600)
 
 
+@app.command("fake-push")
+def fake_push(
+    host: str = "localhost",
+    port: int = 11114,
+    calling_aet: str = "CT_TEST",
+    accession_number: str = "PUSH0001",
+    instances: int = 12,
+):
+    """Send one synthetic CT study by C-STORE, to try the push ingress."""
+    from pynetdicom import AE
+
+    from radfetch.devtools.fakepacs import CT, FakeSeries, FakeStudy, _instance
+
+    study = FakeStudy(accession_number, [FakeSeries("CT", "Thorax 2.0 B31f", instances)])
+    ae = AE(ae_title=calling_aet)
+    ae.add_requested_context(CT)
+    assoc = ae.associate(host, port)
+    if not assoc.is_established:
+        typer.echo("error: association rejected or host unreachable", err=True)
+        raise typer.Exit(1)
+    stored = sum(
+        1 for i in range(instances) if assoc.send_c_store(_instance(study, study.series[0], i + 1)).Status == 0
+    )
+    assoc.release()
+    typer.echo(f"sent {stored}/{instances} instances of {accession_number} as {calling_aet}")
+    raise typer.Exit(0 if stored == instances else 1)
+
+
 # --- client commands ------------------------------------------------------------------
 
 

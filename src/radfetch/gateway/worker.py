@@ -57,6 +57,7 @@ class Gateway:
         )
         self._last_op = float("-inf")
         self._last_heartbeat = float("-inf")
+        self._outage_notified = False
         self._tmp = settings.cache_dir / ".tmp"
         # Leftovers from a crash mid-retrieval; nothing references them.
         shutil.rmtree(self._tmp, ignore_errors=True)
@@ -121,7 +122,7 @@ class Gateway:
         try:
             studies = self._pacs(self.pacs.find_studies, accession)
             if not studies or (len(studies) > 1 and flow.multiple_studies == "fail"):
-                self.breaker.record_success()
+                self._pacs_ok()
                 reason = "no study found" if not studies else f"{len(studies)} studies found, expected one"
                 store.fail_job(self.conn, job_id, f"{reason} for accession number {accession}", self.owner)
                 return True
@@ -137,7 +138,7 @@ class Gateway:
             else:
                 store.retry_resolve(self.conn, job_id, self.owner, str(exc), s.backoff_s(job["attempts"]))
             return True
-        self.breaker.record_success()
+        self._pacs_ok()
 
         selected = flow.select_series(series)
         if not all(valid_uid(u.series_instance_uid) for u in selected) or not all(
@@ -179,7 +180,7 @@ class Gateway:
                 self._pacs_failure("retrieve", exc)
                 self._retrieval_failed(r, str(exc))
                 return True
-            self.breaker.record_success()
+            self._pacs_ok()
             self.bucket.consume(result.received)
 
             expected = r["expected_instances"]
@@ -209,7 +210,15 @@ class Gateway:
         )
         log.warning("retrieval of %s failed%s: %s", r["series_instance_uid"], " permanently" if final else "", error)
 
+    def _pacs_ok(self) -> None:
+        self.breaker.record_success()
+        self._outage_notified = False
+
     def _pacs_failure(self, what: str, exc: Exception) -> None:
         self.breaker.record_failure()
+        if self.breaker.is_open and not self._outage_notified:
+            # One message per outage: the flag is cleared by the next successful PACS operation.
+            self._outage_notified = True
+            store.enqueue_notification(self.conn, "pacs_unreachable", failures=self.breaker.failures, error=str(exc))
         if self.breaker.is_open:
             log.error("circuit breaker open after %d PACS failures (%s: %s)", self.breaker.failures, what, exc)
