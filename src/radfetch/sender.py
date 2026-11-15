@@ -7,9 +7,11 @@ import os
 import shutil
 import socket
 import time
+import uuid
 from pathlib import Path
 from typing import Callable
 
+import httpx
 from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 from pynetdicom import AE
@@ -71,6 +73,47 @@ def send_dicom(out_dir: Path, dest: dict, settings: Settings) -> None:
         assoc.release()
 
 
+def send_stow(out_dir: Path, dest: dict, settings: Settings) -> None:
+    """STOW-RS every DICOM file under out_dir in one multipart request, streamed from disk."""
+    files = []
+    for path in sorted(p for p in out_dir.rglob("*") if p.is_file()):
+        try:
+            dcmread(path, stop_before_pixels=True)
+        except InvalidDicomError:
+            continue
+        files.append(path)
+    if not files:
+        raise DeliveryError("run produced no DICOM files")
+    headers = {}
+    if dest.get("token_env"):
+        token = os.environ.get(dest["token_env"])
+        if not token:
+            raise DeliveryError(f"environment variable {dest['token_env']} is not set for the sender")
+        headers["Authorization"] = f"Bearer {token}"
+    boundary = f"radfetch-{uuid.uuid4().hex}"
+    headers["Content-Type"] = f'multipart/related; type="application/dicom"; boundary={boundary}'
+    headers["Accept"] = "application/dicom+json"
+
+    def body():
+        for path in files:
+            yield f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+            with open(path, "rb") as f:
+                while chunk := f.read(1 << 16):
+                    yield chunk
+            yield b"\r\n"
+        yield f"--{boundary}--\r\n".encode()
+
+    try:
+        r = httpx.post(
+            dest["url"].rstrip("/") + "/studies", content=body(), headers=headers, timeout=settings.dicomweb_timeout_s
+        )
+    except httpx.HTTPError as exc:
+        raise DeliveryError(f"STOW-RS request failed: {exc}") from exc
+    # 200: everything stored. 202: some instances were refused. 409: all were refused.
+    if r.status_code != 200:
+        raise DeliveryError(f"STOW-RS returned HTTP {r.status_code}")
+
+
 class Sender:
     def __init__(self, conn: store.Conn, settings: Settings, *, sleep: Callable[[float], None] = time.sleep):
         self.conn, self.s = conn, settings
@@ -94,6 +137,8 @@ class Sender:
                 send_directory(out_dir, dest, str(d["job_id"]))
             elif dest["type"] == "dicom":
                 send_dicom(out_dir, dest, self.s)
+            elif dest["type"] == "stow":
+                send_stow(out_dir, dest, self.s)
             else:
                 raise DeliveryError(f"unknown destination type: {dest['type']}")
         except DeliveryError as exc:

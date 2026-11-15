@@ -120,13 +120,16 @@ class Gateway:
             return True
         try:
             studies = self._pacs(self.pacs.find_studies, accession)
-            if len(studies) != 1:
+            if not studies or (len(studies) > 1 and flow.multiple_studies == "fail"):
                 self.breaker.record_success()
                 reason = "no study found" if not studies else f"{len(studies)} studies found, expected one"
                 store.fail_job(self.conn, job_id, f"{reason} for accession number {accession}", self.owner)
                 return True
-            study = studies[0]
-            series = self._pacs(self.pacs.find_series, study.study_instance_uid)
+            studies = sorted(studies, key=lambda st: st.study_instance_uid)
+            study = studies[0]  # recorded on the job; with several studies it is the first by UID
+            series = []
+            for st in studies:
+                series += self._pacs(self.pacs.find_series, st.study_instance_uid)
         except PacsError as exc:
             self._pacs_failure("resolve", exc)
             if job["attempts"] >= s.resolve_max_attempts:
@@ -137,7 +140,9 @@ class Gateway:
         self.breaker.record_success()
 
         selected = flow.select_series(series)
-        if not all(valid_uid(u.series_instance_uid) for u in selected) or not valid_uid(study.study_instance_uid):
+        if not all(valid_uid(u.series_instance_uid) for u in selected) or not all(
+            valid_uid(st.study_instance_uid) for st in studies
+        ):
             store.fail_job(self.conn, job_id, "PACS returned a malformed UID", self.owner)
             return True
         if not selected:

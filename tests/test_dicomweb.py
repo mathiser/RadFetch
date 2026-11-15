@@ -112,3 +112,29 @@ def test_gateway_over_dicomweb(web, conn):
     assert store.get_job(conn, job)["state"] == "ready"
     (uid,) = store.job_series_uids(conn, job)
     assert len(list((settings.cache_dir / uid).glob("*.dcm"))) == 12 and pacs.counts["get"] == 1
+
+
+def test_stow_delivery(web, conn, tmp_path, monkeypatch):
+    """A run's DICOM output is delivered by STOW-RS; non-DICOM files are skipped."""
+    from radfetch.devtools.fakepacs import _instance
+    from radfetch.sender import DeliveryError, send_stow
+
+    settings, pacs = web
+    out = tmp_path / "out"
+    out.mkdir()
+    study = default_studies(1)[0]
+    sent = [_instance(study, study.series[0], i) for i in (1, 2, 3)]
+    for i, ds in enumerate(sent):
+        ds.save_as(out / f"r{i}.dcm", enforce_file_format=True)
+    (out / "notes.txt").write_text("not dicom")
+    dest = {"type": "stow", "url": settings.dicomweb_url, "token_env": "STOW_TOKEN"}
+
+    with pytest.raises(DeliveryError, match="STOW_TOKEN is not set"):
+        send_stow(out, dest, settings)
+    monkeypatch.setenv("STOW_TOKEN", "wrong")
+    with pytest.raises(DeliveryError, match="HTTP 401"):
+        send_stow(out, dest, settings)
+    monkeypatch.setenv("STOW_TOKEN", "tok")
+    send_stow(out, dest, settings)
+    assert set(pacs.stored) == {ds.SOPInstanceUID for ds in sent}
+    assert pacs.stored[sent[0].SOPInstanceUID] == (out / "r0.dcm").read_bytes()  # byte for byte

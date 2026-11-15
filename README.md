@@ -61,10 +61,22 @@ One YAML file per flow in `flows/`; see `flows/example.yaml`. A flow says which
 series to fetch, which image to run and where the output goes. Files are read on
 every use, so edits apply without restarts.
 
+Destinations can be `directory`, `dicom` (C-STORE) or `stow` (STOW-RS). A flow
+can set `multiple_studies: all` to run on the matching series of every study that
+shares the accession number; the default is to fail such a job.
+`radfetch check-flows` validates every flow file.
+
 Container contract: input at `/input/<SeriesInstanceUID>/*.dcm` (read-only),
 results written to `/output`, exit code 0 on success, no network.
 `RADFETCH_JOB_ID`, `RADFETCH_ACCESSION_NUMBER`, `RADFETCH_STUDY_INSTANCE_UID`
 and `RADFETCH_FLOW` are set in the environment.
+
+## Retrying
+
+`POST /jobs/<id>/retry` (or the Retry button, or `radfetch retry <id>`) restarts a
+failed or cancelled job. If only the delivery failed, the job goes back to
+`sending` and inference is not repeated; add `?full=true` to start over anyway.
+`POST /batches/<id>/retry-failed` does the same for every failed job of a batch.
 
 ## Push ingress
 
@@ -141,6 +153,8 @@ RADFETCH_TEST_DATABASE_URL=postgresql://radfetch:radfetch@localhost:5432/radfetc
 
 Use a separate scratch database if the stack holds real jobs: the tests drop every table.
 The Docker runtime tests run only when a Docker daemon is reachable.
+`.github/workflows/test.yml` runs the suite, builds the image and validates the
+example flows on every pull request and push to `main`.
 
 ## Schema changes
 
@@ -152,5 +166,3 @@ add the next numbered file; never edit one that has been applied.
 
 - Per-user accounts on the API and UI (there is one shared token).
 - TLS on the storage SCP and on DIMSE connections.
-- Accession numbers that map to several studies fail the job rather than running on each.
-- STOW-RS as a delivery destination.

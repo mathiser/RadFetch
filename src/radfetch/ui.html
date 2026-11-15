@@ -154,6 +154,9 @@ function renderBatches(batches) {
         el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/${b.paused ? "resume" : "pause"}`)) }, b.paused ? "Resume" : "Pause"), " ",
         el("button", { className: "small", onclick: () => confirm(`Cancel batch "${b.name}"?`) && act(() => post(`/batches/${b.id}/cancel`)) }, "Cancel"));
     }
+    if (b.jobs.failed) {
+      buttons.append(" ", el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/retry-failed`)) }, "Retry failed"));
+    }
     return el("tr", {}, el("td", {}, b.name), el("td", {}, b.flow), el("td", {}, progress), el("td", {}, when(b.created_at)), buttons);
   }));
   if (!batches.length) $("batches").append(el("tr", {}, el("td", { colSpan: 5, className: "muted" }, "No batches yet.")));
@@ -164,6 +167,9 @@ function renderJobs(jobs) {
     const cancel = el("td");
     if (!["done", "failed", "cancelled"].includes(j.state)) {
       cancel.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/cancel`)); } }, "Cancel"));
+    }
+    if (["failed", "cancelled"].includes(j.state)) {
+      cancel.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/retry`)); } }, "Retry"));
     }
     return el("tr", { className: "job", onclick: () => { selectedJob = j.id; showJob(); } },
       el("td", { className: "mono" }, j.accession_number || "(none)"), el("td", {}, j.flow),

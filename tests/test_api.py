@@ -27,6 +27,10 @@ def test_api(conn, settings):
 
         assert client.post(f"/jobs/{job['id']}/cancel").json() == {"cancelled": True}
         assert client.post(f"/jobs/{job['id']}/cancel").json() == {"cancelled": False}
+        assert client.post(f"/jobs/{job['id']}/retry").json() == {"state": "queued"}
+        assert client.post(f"/jobs/{job['id']}/retry").status_code == 409
+        assert client.post(f"/jobs/{job['id']}/cancel").json() == {"cancelled": True}
+        assert client.post(f"/batches/{bid}/retry-failed").json() == {"retried": 0}
         assert client.get("/jobs/00000000-0000-0000-0000-000000000000").status_code == 404
         assert client.get("/healthz").json() == {"ok": True, "jobs": {"cancelled": 4}, "status": {}}
 

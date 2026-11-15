@@ -378,3 +378,76 @@ def test_failed_delivery_retries_without_rerunning(conn, settings, pacs, runtime
     dest.mkdir()
     drain(sender)
     assert state(conn, job) == "done" and len(runtime.started) == 1
+
+
+def test_retry_failed_run_starts_over_with_fresh_attempts(conn, settings, pacs):
+    job = one_off(conn)
+    gateway = make_gateway(conn, pacs, settings)
+    drain(gateway)
+    runtime = FakeRuntime(lambda spec: 3)
+    executor = make_executor(conn, runtime, settings)
+    drain(executor)
+    assert state(conn, job) == "failed" and len(runtime.started) == 2
+    assert store.retry_job(conn, one_off(conn, "ACC0002")) is None  # a queued job is not retryable
+
+    assert store.retry_job(conn, job) == "queued"
+    drain(gateway)
+    assert state(conn, job) == "ready" and pacs.retrieved.count("1.2.1.1") == 1  # series still cached
+    runtime.behavior = FakeRuntime.write_result
+    drain(executor)
+    assert state(conn, job) == "sending" and len([s for s in runtime.started if s.job_id == str(job)]) == 3
+    assert [e["kind"] for e in store.job_events(conn, job)].count("retried") == 1
+
+
+def test_retry_after_delivery_failure_only_resends(conn, settings, pacs, runtime, tmp_path):
+    settings.deliver_max_attempts = 1
+    job = one_off(conn)
+    drain(make_gateway(conn, pacs, settings))
+    drain(make_executor(conn, runtime, settings))
+    dest = tmp_path / "dest"
+    shutil.rmtree(dest)
+    dest.write_text("broken")
+    sender = Sender(conn, settings)
+    drain(sender)
+    assert state(conn, job) == "failed"
+
+    dest.unlink()
+    dest.mkdir()
+    assert store.retry_job(conn, job) == "sending"
+    drain(sender)
+    assert state(conn, job) == "done" and len(runtime.started) == 1  # inference not repeated
+
+    # full=True forces a rerun even though the run itself had succeeded
+    other = one_off(conn, "ACC0003")
+    drain(make_gateway(conn, pacs, settings))
+    drain(make_executor(conn, runtime, settings))
+    store.cancel_job(conn, other)
+    assert store.retry_job(conn, other, full=True) == "queued"
+
+
+def test_retry_failed_in_batch(conn, settings, pacs):
+    batch = store.create_batch(conn, "b", "seg", ["ACC0001", "NOPE"], BATCH_PRIORITY)
+    gateway = make_gateway(conn, pacs, settings)
+    drain(gateway)
+    assert store.get_batch(conn, batch)["jobs"] == {"ready": 1, "failed": 1}
+    pacs.n = 0
+    pacs.extra_studies["NOPE"] = [__import__("radfetch.gateway.pacs", fromlist=["StudyInfo"]).StudyInfo("1.2.7", "NOPE")]
+    assert store.retry_failed_in_batch(conn, batch) == 1
+    drain(gateway)
+    assert store.get_batch(conn, batch)["jobs"] == {"ready": 2}
+
+
+def test_multiple_studies_all(conn, settings, pacs, runtime):
+    from radfetch.gateway.pacs import StudyInfo
+
+    pacs.extra_studies["DOUBLE"] = [StudyInfo("1.2.9", "DOUBLE"), StudyInfo("1.2.8", "DOUBLE")]
+    (settings.flows_dir / "multi.yaml").write_text(
+        "name: multi\nimage: x\nmultiple_studies: all\nselect:\n  - modality: CT\n    min_instances: 5\n"
+    )
+    job = one_off(conn, "DOUBLE", "multi")
+    drain(make_gateway(conn, pacs, settings))
+    row = store.get_job(conn, job)
+    assert row["state"] == "ready" and row["study_instance_uid"] == "1.2.8"
+    assert store.job_series_uids(conn, job) == ["1.2.8.1", "1.2.9.1"]
+    drain(make_executor(conn, runtime, settings))
+    assert sorted(p.name for p in runtime.started[0].input_dir.iterdir()) == ["1.2.8.1", "1.2.9.1"]

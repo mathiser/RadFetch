@@ -9,6 +9,8 @@ select:
     min_instances: 5
 # all (default) or largest (only the matching series with the most instances)
 pick: all
+# What to do when the accession number maps to several studies: fail (default) or all.
+multiple_studies: fail
 
 # Pin by digest in production (image@sha256:...) and pre-pull it on the host.
 # Contract: input at /input/<SeriesInstanceUID>/*.dcm (read-only), results written to /output,
@@ -30,6 +32,9 @@ destinations:
   #   host: 10.0.0.5
   #   port: 104
   #   ae_title: DEST
+  # - type: stow
+  #   url: https://pacs.example/dicom-web
+  #   token_env: STOW_TOKEN # environment variable of the sender service holding a bearer token
 
 # Optional. With a trigger, studies pushed to the storage SCP (port 11114) also start
 # this flow when the series rules above match. Without it, only submitted jobs do.

@@ -12,7 +12,7 @@ from io import BytesIO
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydicom import dcmwrite
+from pydicom import dcmread, dcmwrite
 from pydicom.dataset import Dataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 from pynetdicom import AE, evt
@@ -94,6 +94,7 @@ class FakePacsServer:
         self.ae_title = ae_title
         self.move_destinations = move_destinations or {}
         self.counts = {"find": 0, "get": 0, "move": 0}
+        self.stored: dict[str, bytes] = {}  # instances received over STOW-RS
         self._instances = {
             series.uid: [_instance(study, series, i + 1) for i in range(series.instances)]
             for study in self.studies
@@ -265,5 +266,34 @@ def dicomweb_app(server: FakePacsServer, page_limit: int = 1000, token: str | No
         return StreamingResponse(
             body(), media_type=f'multipart/related; type="application/dicom"; boundary={boundary}'
         )
+
+    @app.post("/studies")
+    async def stow(request: Request):
+        """STOW-RS: keeps what it receives in `server.stored` (SOPInstanceUID -> bytes)."""
+        check(request)
+        from radfetch.gateway.dicomweb import split_multipart
+
+        content_type = request.headers.get("content-type", "")
+        boundary = next(
+            (p.split("=", 1)[1].strip().strip('"') for p in content_type.split(";") if p.strip().startswith("boundary=")),
+            None,
+        )
+        if boundary is None:
+            raise HTTPException(415)
+        parts: list[BytesIO] = []
+
+        class Part(BytesIO):
+            def close(self):  # keep the bytes readable after the splitter is done with the part
+                pass
+
+        def open_part():
+            parts.append(Part())
+            return parts[-1]
+
+        split_multipart([await request.body()], boundary.encode(), open_part)
+        for part in parts:
+            ds = dcmread(BytesIO(part.getvalue()), stop_before_pixels=True)
+            server.stored[str(ds.SOPInstanceUID)] = part.getvalue()
+        return JSONResponse({}, media_type="application/dicom+json")
 
     return app

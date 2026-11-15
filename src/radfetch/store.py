@@ -90,6 +90,53 @@ def cancel_job(conn: Conn, job_id: uuid.UUID) -> bool:
         return cur.rowcount == 1
 
 
+def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False) -> str | None:
+    """Give a failed or cancelled job another go. Returns the state it restarts from, or None if not retryable.
+
+    When only delivery failed and the run's output is still wanted, the job goes back
+    to 'sending' and inference is not repeated. Otherwise (or with full=True) it
+    starts over from 'queued' with fresh attempt budgets.
+    """
+    with conn.transaction():
+        job = conn.execute(
+            "select id from jobs where id = %s and state in ('failed','cancelled') for update", (job_id,)
+        ).fetchone()
+        if job is None:
+            return None
+        resend = None
+        if not full:
+            resend = conn.execute(
+                "select r.id from runs r where r.job_id = %s and r.state = 'succeeded'"
+                " and r.attempt = (select max(attempt) from runs where job_id = %s)"
+                " and exists (select 1 from deliveries d where d.run_id = r.id and d.state = 'failed')",
+                (job_id, job_id),
+            ).fetchone()
+        if resend:
+            conn.execute(
+                "update deliveries set state = 'pending', attempts = 0, not_before = now(), error = null,"
+                " lease_owner = null, lease_expires_at = null where run_id = %s and state = 'failed'",
+                (resend["id"],),
+            )
+            state = "sending"
+        else:
+            conn.execute("delete from deliveries where job_id = %s", (job_id,))
+            conn.execute("delete from job_series where job_id = %s", (job_id,))
+            state = "queued"
+        conn.execute(
+            "update jobs set state = %s, error = null, attempts = 0, not_before = now(), retried_at = now(),"
+            " lease_owner = null, lease_expires_at = null, updated_at = now() where id = %s",
+            (state, job_id),
+        )
+        log_event(conn, job_id, "retried", restart_from=state)
+        return state
+
+
+def retry_failed_in_batch(conn: Conn, batch_id: uuid.UUID) -> int:
+    with conn.transaction():
+        rows = conn.execute("select id from jobs where batch_id = %s and state = 'failed'", (batch_id,)).fetchall()
+        return sum(1 for row in rows if retry_job(conn, row["id"]))
+
+
 def cancel_batch(conn: Conn, batch_id: uuid.UUID) -> int:
     with conn.transaction():
         rows = conn.execute(
@@ -469,7 +516,12 @@ def delete_run(conn: Conn, run_id: uuid.UUID) -> None:
 
 
 def count_runs(conn: Conn, job_id: uuid.UUID) -> int:
-    return conn.execute("select count(*) as n from runs where job_id = %s", (job_id,)).fetchone()["n"]
+    """Run attempts since the job was created or last retried by hand."""
+    return conn.execute(
+        "select count(*) as n from runs r join jobs j on j.id = r.job_id"
+        " where r.job_id = %s and r.started_at >= coalesce(j.retried_at, '-infinity')",
+        (job_id,),
+    ).fetchone()["n"]
 
 
 def requeue_for_retrieval(conn: Conn, job_id: uuid.UUID, owner: str, missing: list[str]) -> None:

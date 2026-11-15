@@ -204,6 +204,38 @@ def cancel(job_id: uuid.UUID):
     typer.echo("cancelled" if store.cancel_job(conn, job_id) else "not cancelled (unknown or already finished)")
 
 
+@app.command()
+def retry(job_id: uuid.UUID, full: bool = typer.Option(False, help="start over even if only delivery failed")):
+    """Retry a failed or cancelled job."""
+    _, conn = _setup()
+    state = store.retry_job(conn, job_id, full)
+    typer.echo(f"restarted from {state}" if state else "not retried (unknown, or not failed/cancelled)")
+
+
+@app.command("retry-failed")
+def retry_failed(batch_id: uuid.UUID):
+    """Retry every failed job of a batch."""
+    _, conn = _setup()
+    typer.echo(f"retried {store.retry_failed_in_batch(conn, batch_id)} jobs")
+
+
+@app.command("check-flows")
+def check_flows():
+    """Validate every flow file; exits non-zero if any is invalid."""
+    from radfetch.flows import list_flows
+
+    settings = Settings()
+    bad = 0
+    for name in list_flows(settings.flows_dir):
+        try:
+            flow = load_flow(settings.flows_dir, name)
+            typer.echo(f"ok    {name} (version {flow.version}, image {flow.image})")
+        except FlowError as exc:
+            bad += 1
+            typer.echo(f"error {exc}", err=True)
+    raise typer.Exit(1 if bad else 0)
+
+
 @app.command("cancel-batch")
 def cancel_batch(batch_id: uuid.UUID):
     _, conn = _setup()

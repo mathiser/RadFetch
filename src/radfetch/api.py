@@ -134,6 +134,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         found(store.get_job(conn, job_id))
         return {"cancelled": store.cancel_job(conn, job_id)}
 
+    @app.post("/jobs/{job_id}/retry", dependencies=guarded)
+    def retry_job(job_id: uuid.UUID, full: bool = False, conn=Depends(db)):
+        """Retry a failed or cancelled job. Only re-sends when just the delivery failed, unless full=true."""
+        found(store.get_job(conn, job_id))
+        state = store.retry_job(conn, job_id, full)
+        if state is None:
+            raise HTTPException(409, "only failed or cancelled jobs can be retried")
+        return {"state": state}
+
+    @app.post("/batches/{batch_id}/retry-failed", dependencies=guarded)
+    def retry_failed(batch_id: uuid.UUID, conn=Depends(db)):
+        found(store.get_batch(conn, batch_id))
+        return {"retried": store.retry_failed_in_batch(conn, batch_id)}
+
     @app.post("/batches", status_code=201, dependencies=guarded)
     def create_batch(body: BatchIn, conn=Depends(db), x_remote_user: str | None = Header(None)):
         check_flow(body.flow)

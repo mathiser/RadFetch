@@ -195,7 +195,7 @@ class Executor:
                 self.runtime.remove(handle)
 
     def _fail_run(self, job, flow: Flow, run, error: str, exit_code: int | None) -> None:
-        retry = run["attempt"] < flow.max_attempts
+        retry = store.count_runs(self.conn, job["id"]) < flow.max_attempts
         store.run_failed(
             self.conn, job["id"], run["id"], self.owner, error, exit_code, retry, self.s.backoff_s(run["attempt"])
         )

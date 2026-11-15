@@ -59,6 +59,16 @@ class DirectoryDestination(BaseModel):
     path: str
 
 
+class StowDestination(BaseModel):
+    """STOW-RS: POST every DICOM file to `<url>/studies`."""
+
+    type: Literal["stow"]
+    url: str
+    # Name of an environment variable of the sender service holding a bearer token.
+    # The token itself never goes in the flow file or the database.
+    token_env: str | None = None
+
+
 class Trigger(BaseModel):
     """Lets studies pushed to the storage SCP start this flow. Every given condition must hold."""
 
@@ -75,7 +85,7 @@ class Trigger(BaseModel):
         return not self.calling_ae_title or bool(re.search(self.calling_ae_title, calling_ae_title or ""))
 
 
-Destination = Annotated[Union[DicomDestination, DirectoryDestination], Field(discriminator="type")]
+Destination = Annotated[Union[DicomDestination, DirectoryDestination, StowDestination], Field(discriminator="type")]
 
 
 class Flow(BaseModel):
@@ -84,6 +94,9 @@ class Flow(BaseModel):
     select: list[SeriesRule] = Field(min_length=1)
     # all: every matching series; largest: only the matching series with most instances
     pick: Literal["all", "largest"] = "all"
+    # What to do when an accession number maps to several studies.
+    # fail: fail the job. all: run once on the matching series of all of them.
+    multiple_studies: Literal["fail", "all"] = "fail"
     image: str
     command: list[str] | None = None  # overrides the image's default command
     gpu: bool = False
