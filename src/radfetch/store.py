@@ -125,7 +125,7 @@ def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False, by: str | None 
             state = "sending"
         else:
             conn.execute("delete from deliveries where job_id = %s", (job_id,))
-            conn.execute("delete from job_series where job_id = %s", (job_id,))
+            # job_series stays, so the cached series stay protected until the job is resolved again.
             state = "queued"
         conn.execute(
             "update jobs set state = %s, error = null, attempts = 0, not_before = now(), retried_at = now(),"
@@ -254,6 +254,7 @@ def resolve_job(
         )
         if cur.rowcount == 0:
             return False
+        conn.execute("delete from job_series where job_id = %s", (job_id,))  # left from before a retry
         # Sorted to take row locks in a consistent order. The upsert always locks the
         # retrieval row, which is what makes cache eviction safe (see evict_retrieval).
         for s in sorted(series, key=lambda s: s.series_instance_uid):
@@ -624,7 +625,7 @@ def eviction_candidates(conn: Conn, older_than_hours: float) -> list[str]:
     return [row["series_instance_uid"] for row in rows]
 
 
-def evict_retrieval(conn: Conn, series_instance_uid: str, remove_files) -> bool:
+def evict_retrieval(conn: Conn, series_instance_uid: str, remove_files, keep_failed_hours: float = 0) -> bool:
     """staged -> evicted unless an active job still needs the series.
 
     The row lock is taken first and the reference check runs as a later statement,
@@ -639,10 +640,13 @@ def evict_retrieval(conn: Conn, series_instance_uid: str, remove_files) -> bool:
         ).fetchone()
         if row is None:
             return False
+        # In use: needed by an active job, by a retried job waiting to be resolved again, or
+        # by a recently failed job whose input is being kept for inspection and retry.
         in_use = conn.execute(
             "select 1 from job_series js join jobs j on j.id = js.job_id"
-            " where js.series_instance_uid = %s and j.state = any(%s) limit 1",
-            (series_instance_uid, list(NEEDS_CACHE)),
+            " where js.series_instance_uid = %s and (j.state = any(%s) or (j.state = 'failed'"
+            " and j.updated_at > now() - make_interval(secs => %s * 3600.0))) limit 1",
+            (series_instance_uid, [*NEEDS_CACHE, "queued"], keep_failed_hours),
         ).fetchone()
         if in_use:
             return False
@@ -653,12 +657,16 @@ def evict_retrieval(conn: Conn, series_instance_uid: str, remove_files) -> bool:
     return True
 
 
-def purgeable_run(conn: Conn, run_id: uuid.UUID, older_than_hours: float) -> bool:
-    """True when the run's files can go: unknown run, or its job finished long enough ago."""
+def purgeable_run(conn: Conn, run_id: uuid.UUID, older_than_hours: float, keep_failed_hours: float = 0) -> bool:
+    """True when the run's files can go: unknown run, or its job finished long enough ago.
+
+    Runs of failed jobs are kept for at least keep_failed_hours.
+    """
     row = conn.execute(
-        "select j.state, j.updated_at < now() - make_interval(secs => %s * 3600.0) as old"
+        "select j.state, j.updated_at < now() - make_interval(secs => 3600.0 *"
+        " (case when j.state = 'failed' then greatest(%s, %s) else %s end)) as old"
         " from runs r join jobs j on j.id = r.job_id where r.id = %s",
-        (older_than_hours, run_id),
+        (older_than_hours, keep_failed_hours, older_than_hours, run_id),
     ).fetchone()
     if row is None:
         return True

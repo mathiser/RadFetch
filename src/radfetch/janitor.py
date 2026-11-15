@@ -33,18 +33,20 @@ class Janitor:
     def sweep(self) -> None:
         self.s.cache_dir.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(self._trash, ignore_errors=True)
-        evicted = self._evict(store.eviction_candidates(self.conn, self.s.cache_ttl_hours))
+        evicted = self._evict(
+            store.eviction_candidates(self.conn, self.s.cache_ttl_hours), self.s.keep_failed_hours
+        )
         if self._disk_fraction() >= self.s.disk_high_watermark:
             # Under disk pressure the TTL no longer protects anything that no active job needs.
             for series_uid in store.eviction_candidates(self.conn, 0):
                 if self._disk_fraction() < self.s.disk_high_watermark:
                     break
-                evicted += self._evict([series_uid])
+                evicted += self._evict([series_uid], 0)
         purged = self._purge_runs()
         if evicted or purged:
             log.info("evicted %d series, purged %d run directories", evicted, purged)
 
-    def _evict(self, series_uids: list[str]) -> int:
+    def _evict(self, series_uids: list[str], keep_failed_hours: float) -> int:
         n = 0
         for series_uid in series_uids:
             path = self.s.cache_dir / series_uid
@@ -55,7 +57,7 @@ class Janitor:
                     self._trash.mkdir(parents=True, exist_ok=True)
                     path.rename(self._trash / f"{path.name}.{uuid.uuid4().hex}")
 
-            if store.evict_retrieval(self.conn, series_uid, remove_files):
+            if store.evict_retrieval(self.conn, series_uid, remove_files, keep_failed_hours):
                 n += 1
         shutil.rmtree(self._trash, ignore_errors=True)
         return n
@@ -69,7 +71,7 @@ class Janitor:
                 run_id = uuid.UUID(run_dir.name)
             except ValueError:
                 continue
-            if store.purgeable_run(self.conn, run_id, self.s.run_ttl_hours):
+            if store.purgeable_run(self.conn, run_id, self.s.run_ttl_hours, self.s.keep_failed_hours):
                 shutil.rmtree(run_dir, ignore_errors=True)
                 n += 1
         return n

@@ -451,3 +451,43 @@ def test_multiple_studies_all(conn, settings, pacs, runtime):
     assert store.job_series_uids(conn, job) == ["1.2.8.1", "1.2.9.1"]
     drain(make_executor(conn, runtime, settings))
     assert sorted(p.name for p in runtime.started[0].input_dir.iterdir()) == ["1.2.8.1", "1.2.9.1"]
+
+
+def test_keep_failed_jobs_cached(conn, settings, pacs):
+    settings.cache_ttl_hours = settings.run_ttl_hours = 0
+    job = one_off(conn)
+    gateway = make_gateway(conn, pacs, settings)
+    drain(gateway)
+    runtime = FakeRuntime(lambda spec: 3)
+    drain(make_executor(conn, runtime, settings))
+    assert state(conn, job) == "failed"
+    series_dir = settings.cache_dir / "1.2.1.1"
+    run_dir = settings.runs_dir / str(store.latest_run(conn, job)["id"])
+
+    settings.keep_failed_hours = 24
+    janitor = Janitor(conn, settings, disk_fraction=lambda: 0.1)
+    janitor.sweep()
+    assert series_dir.is_dir() and (run_dir / "container.log").is_file()  # kept for inspection
+
+    # Retrying uses the kept series: nothing is fetched from the PACS again, even if
+    # the janitor runs while the job waits to be resolved.
+    store.retry_job(conn, job)
+    janitor.sweep()
+    drain(gateway)
+    assert state(conn, job) == "ready" and pacs.retrieved == ["1.2.1.1"]
+
+    # Disk pressure overrides the option; without the option failed jobs pin nothing.
+    drain(make_executor(conn, runtime, settings))
+    assert state(conn, job) == "failed"
+    Janitor(conn, settings, disk_fraction=lambda: 0.9).sweep()
+    assert not series_dir.exists()
+
+
+def test_failed_jobs_not_kept_by_default(conn, settings, pacs):
+    settings.cache_ttl_hours = settings.run_ttl_hours = 0
+    job = one_off(conn)
+    drain(make_gateway(conn, pacs, settings))
+    drain(make_executor(conn, FakeRuntime(lambda spec: 3), settings))
+    run_dir = settings.runs_dir / str(store.latest_run(conn, job)["id"])
+    Janitor(conn, settings, disk_fraction=lambda: 0.1).sweep()
+    assert not (settings.cache_dir / "1.2.1.1").exists() and not run_dir.exists()

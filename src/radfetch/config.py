@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     # --- Janitor -----------------------------------------------------------
     cache_ttl_hours: float = 72
     run_ttl_hours: float = 168
+    # Keep the cached input series and run files of failed jobs at least this long, so they
+    # can be inspected and retried without fetching from the PACS again. 0 turns it off.
+    # Disk pressure still evicts them.
+    keep_failed_hours: float = 0
     janitor_interval_s: float = 300
 
     @property

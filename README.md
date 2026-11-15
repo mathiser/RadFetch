@@ -78,6 +78,11 @@ failed or cancelled job. If only the delivery failed, the job goes back to
 `sending` and inference is not repeated; add `?full=true` to start over anyway.
 `POST /batches/<id>/retry-failed` does the same for every failed job of a batch.
 
+Set `RADFETCH_KEEP_FAILED_HOURS` to keep the cached input series and run files
+(input links, partial output, container log) of failed jobs for that long, so a
+failed job can be inspected and retried without fetching from the PACS again.
+It is off by default, and disk pressure still evicts the data.
+
 ## Push ingress
 
 Send studies by C-STORE to port 11114 (any called AE title). Set
