@@ -48,6 +48,13 @@ jobs:
           RADFETCH_TEST_DATABASE_URL: postgresql://radfetch:radfetch@localhost:5432/radfetch_test
           RADFETCH_TEST_ORTHANC_URL: http://localhost:8042
       - name: Build image
-        run: docker build -t radfetch:ci .
+        run: docker build -t radfetch:local .
       - name: Validate example flows inside the image
-        run: docker run --rm -v "$PWD/flows:/flows:ro" radfetch:ci check-flows
+        run: docker run --rm -v "$PWD/flows:/flows:ro" radfetch:local check-flows
+
+  smoke:
+    # The whole Compose stack against the fake PACS, with a gpu flow under RADFETCH_DEBUG_FAKE_GPU.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/smoke.sh

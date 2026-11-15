@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     idle_sleep_s: float = 2
     executor_poll_s: float = 2
     container_network: str = "none"
+    # GPUs handed to gpu flows by this executor: empty for all, or device ids such as "0" or
+    # "0,1". With several GPUs, run one executor per GPU, each with its own id.
+    gpu_device_ids: str = ""
+    # Debug only: run gpu flows WITHOUT a GPU, for hosts and CI that have none. The container
+    # gets RADFETCH_FAKE_GPU=1 so a test image can take a CPU path. Never set this in production.
+    debug_fake_gpu: bool = False
     deliver_max_attempts: int = 8
 
     # --- Push ingress (storage SCP) -------------------------------------------

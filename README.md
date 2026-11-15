@@ -165,6 +165,18 @@ Set `RADFETCH_PACS_HOST`, `RADFETCH_PACS_PORT`, `RADFETCH_PACS_AE_TITLE` and
 - `RADFETCH_RETRIEVE_MODE=dicomweb` uses QIDO-RS and WADO-RS against `RADFETCH_DICOMWEB_URL`, with an optional bearer token in `RADFETCH_DICOMWEB_TOKEN`. The PACS host and AE title settings are not used.
 - `RADFETCH_RETRIEVE_MODE=move` uses C-MOVE to the gateway's own storage SCP on port 11113. The PACS must know the local AE title as a destination at this host and port.
 
+## GPUs
+
+A flow with `gpu: true` gets the host's GPUs through the NVIDIA Container Toolkit.
+One executor runs one container at a time, so with several GPUs run one executor
+per GPU and give each its own `RADFETCH_GPU_DEVICE_IDS` (for example `0`).
+
+For development and CI on hosts without a GPU, `RADFETCH_DEBUG_FAKE_GPU=true`
+makes the executor run `gpu: true` flows without requesting a GPU. The container
+gets `RADFETCH_FAKE_GPU=1`, so a test image can take a CPU path. The executor logs
+a warning at start while it is set; never set it in production, where a model
+image would silently run on CPU or fail.
+
 ## Development
 
 ```bash
@@ -183,6 +195,8 @@ RADFETCH_TEST_DATABASE_URL=postgresql://radfetch:radfetch@localhost:5432/radfetc
 
 Use a separate scratch database if the stack holds real jobs: the tests drop every table.
 The Docker runtime tests run only when a Docker daemon is reachable.
+`scripts/smoke.sh` brings the whole Compose stack up against the fake PACS, runs a
+`gpu: true` flow with the fake GPU, and checks the results; CI runs it on every push.
 With `RADFETCH_TEST_ORTHANC_URL` set, the suite also runs against a real Orthanc
 (all three retrieve modes and both DICOM delivery types).
 `.github/workflows/test.yml` runs the suite, builds the image and validates the

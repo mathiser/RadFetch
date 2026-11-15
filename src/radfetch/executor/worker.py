@@ -42,6 +42,8 @@ class Executor:
 
     def run_forever(self) -> None:
         log.info("executor started as %s", self.owner)
+        if self.s.debug_fake_gpu:
+            log.warning("RADFETCH_DEBUG_FAKE_GPU is set: gpu flows run WITHOUT a GPU. Do not use in production.")
         run_steps(self.step, self.s.idle_sleep_s, self._sleep)
 
     def step(self) -> bool:

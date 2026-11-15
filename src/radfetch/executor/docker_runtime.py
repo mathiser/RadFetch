@@ -24,8 +24,11 @@ class DockerRuntime:
             str(self.s.host_path(spec.output_dir)): {"bind": "/output", "mode": "rw"},
         }
         kwargs = {}
-        if spec.gpu:
-            kwargs["device_requests"] = [DeviceRequest(count=-1, capabilities=[["gpu"]])]
+        environment = dict(spec.env)
+        if spec.gpu and self.s.debug_fake_gpu:
+            environment["RADFETCH_FAKE_GPU"] = "1"
+        elif spec.gpu:
+            kwargs["device_requests"] = [self.gpu_request()]
         if spec.mem_limit:
             kwargs["mem_limit"] = spec.mem_limit
         if spec.shm_size:
@@ -37,14 +40,28 @@ class DockerRuntime:
                 detach=True,
                 name=f"radfetch-{spec.run_id}",
                 labels={LABEL_RUN: spec.run_id, LABEL_JOB: spec.job_id},
-                environment=spec.env,
+                environment=environment,
                 volumes=volumes,
                 network_mode=spec.network,
                 **kwargs,
             )
         except DockerException as exc:
+            # A failed start (missing image, no GPU runtime, bad mount) can leave a created
+            # container behind; remove it so failures do not pile up on the host.
+            try:
+                leftover = self.find(spec.run_id)
+                if leftover:
+                    self.remove(leftover)
+            except DockerException:
+                pass
             raise RuntimeError_(f"cannot start container: {exc}") from exc
         return container.id
+
+    def gpu_request(self) -> DeviceRequest:
+        ids = [i.strip() for i in self.s.gpu_device_ids.split(",") if i.strip()]
+        if ids:
+            return DeviceRequest(device_ids=ids, capabilities=[["gpu"]])
+        return DeviceRequest(count=-1, capabilities=[["gpu"]])
 
     def find(self, run_id: str) -> str | None:
         found = self.client.containers.list(all=True, filters={"label": f"{LABEL_RUN}={run_id}"})

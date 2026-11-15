@@ -30,7 +30,7 @@ def docker_runtime(settings):
     return runtime
 
 
-def spec_for(settings, command) -> ContainerSpec:
+def spec_for(settings, command, gpu=False) -> ContainerSpec:
     run_id = str(uuid.uuid4())
     run_dir = settings.runs_dir / run_id
     (run_dir / "in" / "series").mkdir(parents=True)
@@ -45,6 +45,7 @@ def spec_for(settings, command) -> ContainerSpec:
         input_dir=run_dir / "in",
         output_dir=run_dir / "out",
         env={"GREETING": "hello"},
+        gpu=gpu,
     )
 
 
@@ -87,3 +88,54 @@ def test_exit_code_and_kill(docker_runtime, settings):
     assert wait(docker_runtime, handle) == 137
     docker_runtime.remove(handle)
     docker_runtime.remove(handle)  # idempotent
+
+
+def has_gpu(runtime) -> bool:
+    return "nvidia" in runtime.client.info().get("Runtimes", {})
+
+
+def test_fake_gpu_runs_gpu_flow_without_gpu(docker_runtime, settings):
+    settings.debug_fake_gpu = True
+    spec = spec_for(settings, ["sh", "-c", "echo fake=$RADFETCH_FAKE_GPU"], gpu=True)
+    handle = docker_runtime.start(spec)
+    try:
+        assert wait(docker_runtime, handle) == 0
+        assert docker_runtime.logs(handle).strip() == b"fake=1"
+        assert "RADFETCH_FAKE_GPU" not in spec.env  # the caller's spec is not modified
+    finally:
+        docker_runtime.remove(handle)
+
+
+def test_gpu_flow_without_gpu_fails_clearly(docker_runtime, settings):
+    if has_gpu(docker_runtime):
+        pytest.skip("this host has a GPU runtime")
+    from radfetch.executor.runtime import RuntimeError_
+
+    spec = spec_for(settings, ["true"], gpu=True)
+    with pytest.raises(RuntimeError_, match="cannot start container"):
+        docker_runtime.start(spec)
+    assert docker_runtime.find(spec.run_id) is None  # nothing left behind
+
+
+def test_real_gpu_is_visible_in_container(docker_runtime, settings):
+    """Runs only on a host with the NVIDIA runtime: the one test that touches a real GPU."""
+    if not has_gpu(docker_runtime):
+        pytest.skip("no NVIDIA container runtime on this host")
+    spec = spec_for(settings, ["sh", "-c", "ls /dev/nvidia0 && echo fake=$RADFETCH_FAKE_GPU"], gpu=True)
+    handle = docker_runtime.start(spec)
+    try:
+        assert wait(docker_runtime, handle) == 0
+        assert docker_runtime.logs(handle).strip().endswith(b"fake=")
+    finally:
+        docker_runtime.remove(handle)
+
+
+def test_gpu_device_selection(settings):
+    from radfetch.executor.docker_runtime import DockerRuntime
+
+    runtime = DockerRuntime.__new__(DockerRuntime)  # no daemon needed to build the request
+    runtime.s = settings
+    assert runtime.gpu_request() == {"Driver": "", "Count": -1, "DeviceIDs": [], "Capabilities": [["gpu"]], "Options": {}}
+    settings.gpu_device_ids = "1, 3"
+    request = runtime.gpu_request()
+    assert request["DeviceIDs"] == ["1", "3"] and request["Count"] == 0

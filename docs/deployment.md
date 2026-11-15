@@ -31,6 +31,7 @@ in order; each step names how to confirm it worked.
 - [ ] Set the PACS connection, retrieve mode, `RADFETCH_RATE_INSTANCES_PER_MIN` and `RADFETCH_BATCH_WINDOWS`.
 - [ ] Change the Postgres password in `docker-compose.yml` (both in `postgres` and in `RADFETCH_DATABASE_URL`).
 - [ ] If the modalities or PACS require TLS, mount the certificates and set the `RADFETCH_TLS_*` settings (see the README).
+- [ ] Make sure `RADFETCH_DEBUG_FAKE_GPU` is **not** set. With several GPUs, run one executor per GPU with `RADFETCH_GPU_DEVICE_IDS`.
 - [ ] If the push ingress is not used, remove the `scp` service; if it is, set `RADFETCH_SCP_ALLOWED_AE_TITLES`.
 
 ## 4. Flows
@@ -81,6 +82,6 @@ Do these with the PACS team watching their side.
 
 ## Not verified by the project's tests
 
-- GPU device requests (the test environments have no GPU).
+- Real GPU access. `tests/test_docker_runtime.py::test_real_gpu_is_visible_in_container` checks it and runs only on a host with the NVIDIA runtime, so run the suite once on the GPU host.
 - Any vendor PACS: retrieval is tested against Orthanc and an in-memory fake only.
 - C-MOVE over TLS.
