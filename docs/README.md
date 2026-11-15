@@ -1,0 +1,30 @@
+# RadFetch documentation
+
+RadFetch runs containerized workflows on studies from a clinical PACS. It pulls
+studies by accession number (one at a time or in batches) or receives them by
+DICOM push, runs a container on them, and delivers the results, while keeping
+the load on the PACS within limits you set.
+
+## Start here
+
+| If you want to | Read |
+|---|---|
+| Understand how it works | [Concepts](concepts.md) |
+| Try it in ten minutes on your laptop | [Tutorial](tutorial.md) |
+| Install it on a GPU host against a real PACS | [Installation](installation.md) |
+
+## Setting up
+
+- [Connecting a PACS](pacs.md): retrieve modes, AE titles, TLS, trying against Orthanc
+- [Writing flows](flows.md): selecting series, the container contract, destinations, triggers
+- [Configuration reference](configuration.md): every setting
+
+## Running it
+
+- [Administration](administration.md): users and tokens, monitoring, backup, retention, upgrades, GPUs
+- [Troubleshooting](troubleshooting.md): what an error or symptom means and what to do
+- [API reference](api.md) and [command line reference](cli.md)
+
+## Working on RadFetch
+
+- [Development](development.md): tests, CI, project layout
