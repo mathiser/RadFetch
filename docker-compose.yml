@@ -1,0 +1,97 @@
+# Single-host stack. `docker compose --profile dev up` adds a fake PACS with synthetic studies.
+
+x-app: &app
+  build: .
+  image: radfetch:local
+  restart: unless-stopped
+  env_file: .env
+  environment: &env
+    RADFETCH_DATABASE_URL: postgresql://radfetch:radfetch@postgres:5432/radfetch
+    RADFETCH_DATA_DIR: /data
+    RADFETCH_FLOWS_DIR: /flows
+  depends_on:
+    init-db:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: radfetch
+      POSTGRES_PASSWORD: radfetch
+      POSTGRES_DB: radfetch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radfetch"]
+      interval: 5s
+      retries: 12
+
+  init-db:
+    <<: *app
+    restart: "no"
+    command: init-db
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: api
+    volumes:
+      - ./flows:/flows:ro
+    ports:
+      - "127.0.0.1:8000:8000" # no authentication: keep it on localhost or behind a proxy
+
+  gateway: # exactly one instance: this is the PACS concurrency cap
+    <<: *app
+    command: gateway
+    volumes:
+      - ./data:/data
+      - ./flows:/flows:ro
+    ports:
+      - "11113:11113" # storage SCP, used only with RADFETCH_RETRIEVE_MODE=move
+
+  executor: # one instance per GPU
+    <<: *app
+    command: executor
+    volumes:
+      - ./data:/data
+      - ./flows:/flows:ro
+      # Root-equivalent access to the host. Consider a socket proxy that only allows
+      # container create/start/inspect/logs/kill/remove.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  sender:
+    <<: *app
+    command: sender
+    volumes:
+      - ./data:/data
+      - ./flows:/flows:ro
+
+  scp: # push ingress: studies sent here start every flow whose trigger matches
+    <<: *app
+    command: scp
+    volumes:
+      - ./data:/data
+      - ./flows:/flows:ro
+    ports:
+      - "11114:11114"
+
+  janitor:
+    <<: *app
+    command: janitor
+    volumes:
+      - ./data:/data
+
+  fake-pacs:
+    <<: *app
+    profiles: [dev]
+    command: fake-pacs --studies 20 --move-dest RADFETCH=gateway:11113
+    depends_on: []
+
+volumes:
+  pgdata:

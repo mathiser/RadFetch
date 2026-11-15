@@ -1,0 +1,156 @@
+# RadFetch
+
+Runs containerized workflows on studies pulled from a clinical PACS by accession
+number, one-off or in batches, without overloading the PACS.
+
+```
+pull: API / CLI ──> jobs (Postgres) ──> gateway ──┐
+                                          │ C-FIND, C-GET/C-MOVE
+                                         PACS     ├─> series cache ──> executor ──> sender ──> destinations
+push: modality / PACS ── C-STORE ──> scp ─────────┘                      │ Docker
+                                                                    flow container
+```
+
+| Service | Role |
+|---|---|
+| `postgres` | The only state store: jobs, retrievals, runs, deliveries, audit events |
+| `api` | Submit jobs and batches; pause, resume, cancel; status |
+| `gateway` | The only process that talks to the PACS. Resolves accession numbers and retrieves series into the cache |
+| `scp` | Push ingress: a storage SCP; received studies start every flow whose `trigger` matches |
+| `executor` | Runs one flow container at a time (one instance per GPU) |
+| `sender` | Delivers run output (C-STORE or directory), retried independently of inference |
+| `janitor` | Evicts unused cached series and old run directories |
+
+## Quick start (with a fake PACS)
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`: set `RADFETCH_HOST_DATA_DIR` to the absolute path of `./data`, and
+clear `RADFETCH_BATCH_WINDOWS` if you want batches to run during the day.
+
+```bash
+docker compose --profile dev up -d --build
+```
+
+Open http://localhost:8000 for the web UI: submit one-off jobs and batches, pause,
+resume and cancel, and read each job's history. The same operations by `curl`:
+
+```bash
+curl -X POST localhost:8000/jobs -H 'content-type: application/json' \
+  -d '{"accession_number": "ACC0001", "flow": "example"}'
+```
+
+```bash
+curl -X POST localhost:8000/batches -H 'content-type: application/json' \
+  -d '{"name": "demo", "flow": "example", "accession_numbers": ["ACC0002", "ACC0003", "ACC0004"]}'
+```
+
+```bash
+curl localhost:8000/healthz
+```
+
+Results appear under `data/results/<job id>/`. `GET /jobs/<id>` shows a job with
+its full event history. The same operations exist on the CLI
+(`docker compose exec api radfetch --help`).
+
+## Flows
+
+One YAML file per flow in `flows/`; see `flows/example.yaml`. A flow says which
+series to fetch, which image to run and where the output goes. Files are read on
+every use, so edits apply without restarts.
+
+Container contract: input at `/input/<SeriesInstanceUID>/*.dcm` (read-only),
+results written to `/output`, exit code 0 on success, no network.
+`RADFETCH_JOB_ID`, `RADFETCH_ACCESSION_NUMBER`, `RADFETCH_STUDY_INSTANCE_UID`
+and `RADFETCH_FLOW` are set in the environment.
+
+## Push ingress
+
+Send studies by C-STORE to port 11114 (any called AE title). Set
+`RADFETCH_SCP_ALLOWED_AE_TITLES` to a comma-separated list to accept only those senders. Once a study has
+received nothing for `RADFETCH_SCP_STABLE_S` seconds, each flow that has a
+`trigger` is checked: if the sender's AE title matches the trigger and the flow's
+series rules select at least one received series, a job is created that starts at
+`ready`. Flows without a `trigger` are never started by a push, and studies no
+flow wants are dropped. Pushed and pulled series share one cache, so a pushed
+series also satisfies pull jobs waiting for it.
+
+Instances that arrive after the quiet period start a second job with only the
+late instances, so set the quiet period longer than the sender's longest pause.
+
+## Monitoring and access
+
+- `GET /healthz` is always open and includes the gateway's last heartbeat.
+- `GET /metrics` is Prometheus text: jobs, retrievals and deliveries by state, cache size, age of the oldest unfinished job, and whether the circuit breaker is open.
+- Set `RADFETCH_API_TOKEN` to require `Authorization: Bearer <token>` on everything except `/healthz`. Without it the API has no authentication and should stay on localhost.
+
+## How the PACS is protected
+
+All of this lives in the gateway (`src/radfetch/gateway/`):
+
+- **One association at a time.** The gateway is a single process doing one PACS operation per step. Run exactly one instance.
+- **Selective retrieval.** Only the series a flow selects are fetched, and a series needed by several jobs is fetched once.
+- **Rate budget.** `RADFETCH_RATE_INSTANCES_PER_MIN` caps the average pull rate for batch work; `RADFETCH_MIN_INTERVAL_S` spaces all operations.
+- **Batch windows.** Batch work touches the PACS only inside `RADFETCH_BATCH_WINDOWS`.
+- **Bounded preloading.** Batch series are fetched only while fewer than `RADFETCH_MAX_STAGED_JOBS` jobs are staged for the executor, and batch jobs are resolved only `RADFETCH_MAX_RESOLVED_AHEAD` ahead.
+- **Disk watermarks.** Batch retrieval stops at 80% disk usage, all retrieval at 95%.
+- **Circuit breaker.** After consecutive PACS failures all traffic stops for a cooldown that doubles while failures continue.
+
+One-off jobs (`POST /jobs`) run ahead of batch work and ignore the window, the
+rate budget and the preload limit, but never the single-association cap, the
+circuit breaker or the hard disk limit.
+
+## Job states
+
+```
+queued ─> retrieving ─> ready ─> running ─> sending ─> done
+   any state before done ─> failed | cancelled
+```
+
+Workers claim rows with a lease (`FOR UPDATE SKIP LOCKED`). A crashed worker
+needs no cleanup: its lease expires and the row is claimable again. After an
+executor crash, the next executor adopts the still-running container by label
+instead of starting inference again.
+
+## Connecting a real PACS
+
+Set `RADFETCH_PACS_HOST`, `RADFETCH_PACS_PORT`, `RADFETCH_PACS_AE_TITLE` and
+`RADFETCH_LOCAL_AE_TITLE` in `.env`.
+
+- `RADFETCH_RETRIEVE_MODE=get` uses C-GET: nothing to register on the PACS beyond the calling AE title, but not every PACS supports it. The storage classes requested are listed in `GET_STORAGE_CLASSES` in `gateway/dimse.py`; extend that list for other modalities.
+- `RADFETCH_RETRIEVE_MODE=dicomweb` uses QIDO-RS and WADO-RS against `RADFETCH_DICOMWEB_URL`, with an optional bearer token in `RADFETCH_DICOMWEB_TOKEN`. The PACS host and AE title settings are not used.
+- `RADFETCH_RETRIEVE_MODE=move` uses C-MOVE to the gateway's own storage SCP on port 11113. The PACS must know the local AE title as a destination at this host and port.
+
+## Development
+
+```bash
+uv venv && uv pip install -e '.[dev]'
+```
+
+Database tests need a Postgres they may wipe:
+
+```bash
+docker compose up -d postgres
+```
+
+```bash
+RADFETCH_TEST_DATABASE_URL=postgresql://radfetch:radfetch@localhost:5432/radfetch pytest
+```
+
+Use a separate scratch database if the stack holds real jobs: the tests drop every table.
+The Docker runtime tests run only when a Docker daemon is reachable.
+
+## Schema changes
+
+`radfetch init-db` applies the numbered SQL files in `src/radfetch/migrations/`
+that have not run yet, and Compose runs it on every start. To change the schema,
+add the next numbered file; never edit one that has been applied.
+
+## Not built yet
+
+- Per-user accounts on the API and UI (there is one shared token).
+- TLS on the storage SCP and on DIMSE connections.
+- Accession numbers that map to several studies fail the job rather than running on each.
+- STOW-RS as a delivery destination.
