@@ -149,6 +149,10 @@ instead of starting inference again.
 
 ## Connecting a real PACS
 
+`docs/deployment.md` is a step-by-step checklist for a first installation, including
+what to ask the PACS administrator and a trial plan. To try against a real PACS
+implementation locally first, `docker compose --profile orthanc up` adds Orthanc.
+
 Set `RADFETCH_PACS_HOST`, `RADFETCH_PACS_PORT`, `RADFETCH_PACS_AE_TITLE` and
 `RADFETCH_LOCAL_AE_TITLE` in `.env`.
 
@@ -174,6 +178,8 @@ RADFETCH_TEST_DATABASE_URL=postgresql://radfetch:radfetch@localhost:5432/radfetc
 
 Use a separate scratch database if the stack holds real jobs: the tests drop every table.
 The Docker runtime tests run only when a Docker daemon is reachable.
+With `RADFETCH_TEST_ORTHANC_URL` set, the suite also runs against a real Orthanc
+(all three retrieve modes and both DICOM delivery types).
 `.github/workflows/test.yml` runs the suite, builds the image and validates the
 example flows on every pull request and push to `main`.
 
