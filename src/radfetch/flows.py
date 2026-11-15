@@ -52,6 +52,7 @@ class DicomDestination(BaseModel):
     host: str
     port: int
     ae_title: str
+    tls: bool = False  # uses the sender's RADFETCH_TLS_* settings
 
 
 class DirectoryDestination(BaseModel):

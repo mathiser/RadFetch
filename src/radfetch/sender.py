@@ -16,7 +16,7 @@ from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 from pynetdicom import AE
 
-from radfetch import store
+from radfetch import store, tls
 from radfetch.config import Settings
 from radfetch.loop import run_steps
 
@@ -54,7 +54,8 @@ def send_dicom(out_dir: Path, dest: dict, settings: Settings) -> None:
     for sop_class, syntax in sorted({(ds.SOPClassUID, ds.file_meta.TransferSyntaxUID) for ds in datasets}):
         ae.add_requested_context(sop_class, syntax)
     try:
-        assoc = ae.associate(dest["host"], dest["port"], ae_title=dest["ae_title"])
+        tls_args = (tls.client_context(settings), dest["host"]) if dest.get("tls") else None
+        assoc = ae.associate(dest["host"], dest["port"], ae_title=dest["ae_title"], tls_args=tls_args)
     except Exception as exc:
         raise DeliveryError(f"cannot connect to {dest['ae_title']}: {exc}") from exc
     if not assoc.is_established:

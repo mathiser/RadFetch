@@ -43,6 +43,7 @@
   .bar select { width: auto; }
   #msg { min-height: 18px; font-size: 12px; margin-top: 8px; }
   #detail pre { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  body.viewer form, body.viewer td button { display: none; }
   .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 </head>
@@ -51,6 +52,7 @@
   <h1>RadFetch</h1>
   <div class="chips" id="counts"></div>
   <div class="chips" id="gateway"></div>
+  <div class="chips" id="who" style="margin-left:auto"></div>
 </header>
 <main>
   <div>
@@ -204,6 +206,9 @@ async function refresh() {
 async function init() {
   $("state-filter").append(...STATES.map((s) => el("option", { value: s }, s)));
   $("state-filter").onchange = () => refresh().catch((e) => say(e.message, "bad"));
+  const me = await api("/whoami");
+  $("who").replaceChildren(el("span", { className: "chip" }, (me.name || "open access") + (me.role === "viewer" ? " (read-only)" : "")));
+  if (me.role === "viewer") document.body.classList.add("viewer");
   const flows = await api("/flows");
   for (const select of document.querySelectorAll(".flows")) select.append(...flows.map((f) => el("option", {}, f)));
   $("job-form").onsubmit = (e) => { e.preventDefault(); act(async () => {

@@ -13,6 +13,7 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove as MOVE,
 )
 
+from radfetch import tls
 from radfetch.config import Settings
 from radfetch.gateway.pacs import PacsError, RetrieveResult, SeriesInfo, StudyInfo
 
@@ -104,6 +105,8 @@ class DimseClient:
 
     def _associate(self, ae: AE, **kwargs):
         try:
+            if self.s.pacs_tls:
+                kwargs["tls_args"] = (tls.client_context(self.s), self.s.pacs_host)
             assoc = ae.associate(self.s.pacs_host, self.s.pacs_port, ae_title=self.s.pacs_ae_title, **kwargs)
         except Exception as exc:  # DNS failure, refused connection, ...
             raise PacsError(f"cannot connect to PACS: {exc}") from exc
@@ -118,6 +121,7 @@ class DimseClient:
             ("0.0.0.0", self.s.move_scp_port),
             block=False,
             evt_handlers=[(evt.EVT_C_STORE, self._sink.handle_store)],
+            ssl_context=tls.server_context(self.s) if self.s.pacs_tls else None,
         )
 
     def close(self) -> None:

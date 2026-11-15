@@ -175,7 +175,7 @@ class FakePacsServer:
 
     # --- lifecycle -----------------------------------------------------------------
 
-    def start(self, port: int = 11112, block: bool = False):
+    def start(self, port: int = 11112, block: bool = False, ssl_context=None):
         ae = AE(ae_title=self.ae_title)
         for uid in (CT, SC):
             ae.add_requested_context(uid)  # storage SCU, for C-MOVE sub-operations
@@ -193,7 +193,7 @@ class FakePacsServer:
             (evt.EVT_C_GET, self._handle_get),
             (evt.EVT_C_MOVE, self._handle_move),
         ]
-        self._server = ae.start_server(("0.0.0.0", port), block=block, evt_handlers=handlers)
+        self._server = ae.start_server(("0.0.0.0", port), block=block, evt_handlers=handlers, ssl_context=ssl_context)
         return self
 
     def stop(self) -> None:

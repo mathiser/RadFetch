@@ -6,6 +6,8 @@ is simply claimable again, so a crashed worker needs no cleanup.
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 import uuid
 from typing import Any, Iterable
 
@@ -72,12 +74,15 @@ def create_batch(
     return batch_id
 
 
-def set_batch_paused(conn: Conn, batch_id: uuid.UUID, paused: bool) -> bool:
-    cur = conn.execute("update batches set paused = %s where id = %s", (paused, batch_id))
-    return cur.rowcount == 1
+def set_batch_paused(conn: Conn, batch_id: uuid.UUID, paused: bool, by: str | None = None) -> bool:
+    with conn.transaction():
+        cur = conn.execute("update batches set paused = %s where id = %s", (paused, batch_id))
+        if cur.rowcount:
+            log_event(conn, None, "batch_paused" if paused else "batch_resumed", batch=str(batch_id), by=by)
+        return cur.rowcount == 1
 
 
-def cancel_job(conn: Conn, job_id: uuid.UUID) -> bool:
+def cancel_job(conn: Conn, job_id: uuid.UUID, by: str | None = None) -> bool:
     """Cancel unless already finished. A running container is stopped by the executor's next heartbeat."""
     with conn.transaction():
         cur = conn.execute(
@@ -86,11 +91,11 @@ def cancel_job(conn: Conn, job_id: uuid.UUID) -> bool:
             (job_id,),
         )
         if cur.rowcount:
-            log_event(conn, job_id, "cancelled")
+            log_event(conn, job_id, "cancelled", by=by)
         return cur.rowcount == 1
 
 
-def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False) -> str | None:
+def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False, by: str | None = None) -> str | None:
     """Give a failed or cancelled job another go. Returns the state it restarts from, or None if not retryable.
 
     When only delivery failed and the run's output is still wanted, the job goes back
@@ -127,17 +132,17 @@ def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False) -> str | None:
             " lease_owner = null, lease_expires_at = null, updated_at = now() where id = %s",
             (state, job_id),
         )
-        log_event(conn, job_id, "retried", restart_from=state)
+        log_event(conn, job_id, "retried", restart_from=state, by=by)
         return state
 
 
-def retry_failed_in_batch(conn: Conn, batch_id: uuid.UUID) -> int:
+def retry_failed_in_batch(conn: Conn, batch_id: uuid.UUID, by: str | None = None) -> int:
     with conn.transaction():
         rows = conn.execute("select id from jobs where batch_id = %s and state = 'failed'", (batch_id,)).fetchall()
-        return sum(1 for row in rows if retry_job(conn, row["id"]))
+        return sum(1 for row in rows if retry_job(conn, row["id"], by=by))
 
 
-def cancel_batch(conn: Conn, batch_id: uuid.UUID) -> int:
+def cancel_batch(conn: Conn, batch_id: uuid.UUID, by: str | None = None) -> int:
     with conn.transaction():
         rows = conn.execute(
             "update jobs set state = 'cancelled', updated_at = now(), lease_owner = null, lease_expires_at = null"
@@ -145,7 +150,7 @@ def cancel_batch(conn: Conn, batch_id: uuid.UUID) -> int:
             (batch_id,),
         ).fetchall()
         for row in rows:
-            log_event(conn, row["id"], "cancelled", via="batch")
+            log_event(conn, row["id"], "cancelled", via="batch", by=by)
         return len(rows)
 
 
@@ -776,3 +781,45 @@ def metrics(conn: Conn) -> dict[str, Any]:
         "status": get_status(conn),
         **extra,
     }
+
+
+# --- API tokens -----------------------------------------------------------------------------
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_token(conn: Conn, name: str, role: str) -> str:
+    """Create a named token and return it. This is the only time the token itself is available."""
+    token = "rf_" + secrets.token_urlsafe(32)
+    conn.execute(
+        "insert into api_tokens (id, name, role, token_hash) values (%s, %s, %s, %s)",
+        (uuid.uuid4(), name, role, _token_hash(token)),
+    )
+    log_event(conn, None, "token_created", name=name, role=role)
+    return token
+
+
+def find_token(conn: Conn, token: str) -> Row | None:
+    return conn.execute(
+        "select name, role from api_tokens where token_hash = %s and revoked_at is null", (_token_hash(token),)
+    ).fetchone()
+
+
+def tokens_exist(conn: Conn) -> bool:
+    return conn.execute("select 1 from api_tokens where revoked_at is null limit 1").fetchone() is not None
+
+
+def list_tokens(conn: Conn) -> list[Row]:
+    return conn.execute("select name, role, created_at, revoked_at from api_tokens order by created_at").fetchall()
+
+
+def revoke_token(conn: Conn, name: str) -> bool:
+    with conn.transaction():
+        cur = conn.execute(
+            "update api_tokens set revoked_at = now() where name = %s and revoked_at is null", (name,)
+        )
+        if cur.rowcount:
+            log_event(conn, None, "token_revoked", name=name)
+        return cur.rowcount == 1

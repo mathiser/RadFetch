@@ -21,7 +21,7 @@ from psycopg_pool import ConnectionPool
 from pydicom import dcmread
 from pynetdicom import AE, AllStoragePresentationContexts, evt
 
-from radfetch import store
+from radfetch import store, tls
 from radfetch.config import Settings
 from radfetch.flows import Flow, FlowError, list_flows, load_flow
 from radfetch.gateway.pacs import SeriesInfo, valid_uid
@@ -55,9 +55,12 @@ class IngressServer:
         if allowed:
             ae.require_calling_aet = allowed  # other senders are rejected at association time
         self._server = ae.start_server(
-            ("0.0.0.0", self.s.scp_port), block=False, evt_handlers=[(evt.EVT_C_STORE, self._handle_store)]
+            ("0.0.0.0", self.s.scp_port),
+            block=False,
+            evt_handlers=[(evt.EVT_C_STORE, self._handle_store)],
+            ssl_context=tls.server_context(self.s) if self.s.scp_tls else None,
         )
-        log.info("storage SCP listening on port %d", self.s.scp_port)
+        log.info("storage SCP listening on port %d%s", self.s.scp_port, " (TLS)" if self.s.scp_tls else "")
 
     def stop(self) -> None:
         if self._server is not None:

@@ -236,6 +236,35 @@ def check_flows():
     raise typer.Exit(1 if bad else 0)
 
 
+token_app = typer.Typer(no_args_is_help=True, help="Manage named API tokens.")
+app.add_typer(token_app, name="token")
+
+
+@token_app.command("create")
+def token_create(name: str, role: str = typer.Option("operator", help="viewer (read-only) or operator")):
+    """Create a token and print it once. Creating the first token turns authentication on."""
+    if role not in ("viewer", "operator"):
+        typer.echo("error: role must be viewer or operator", err=True)
+        raise typer.Exit(2)
+    conn = db.connect(Settings().database_url)
+    try:
+        typer.echo(store.create_token(conn, name, role))
+    except Exception as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@token_app.command("list")
+def token_list():
+    _print(store.list_tokens(db.connect(Settings().database_url)))
+
+
+@token_app.command("revoke")
+def token_revoke(name: str):
+    ok = store.revoke_token(db.connect(Settings().database_url), name)
+    typer.echo("revoked" if ok else "no active token with that name")
+
+
 @app.command("cancel-batch")
 def cancel_batch(batch_id: uuid.UUID):
     _, conn = _setup()

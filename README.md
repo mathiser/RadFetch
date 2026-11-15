@@ -96,7 +96,28 @@ late instances, so set the quiet period longer than the sender's longest pause.
 
 - `GET /healthz` is always open and includes the gateway's last heartbeat.
 - `GET /metrics` is Prometheus text: jobs, retrievals and deliveries by state, cache size, age of the oldest unfinished job, and whether the circuit breaker is open.
-- Set `RADFETCH_API_TOKEN` to require `Authorization: Bearer <token>` on everything except `/healthz`. Without it the API has no authentication and should stay on localhost.
+
+### API access
+
+The API is open until a token exists, so keep it on localhost until you have created one.
+
+```bash
+docker compose exec api radfetch token create amy --role operator
+```
+
+- The token is printed once; only its hash is stored. `radfetch token list` and `radfetch token revoke <name>` manage them.
+- `operator` tokens may submit, cancel, retry and pause. `viewer` tokens are read-only, and the UI hides its controls for them.
+- The token's name is recorded as the requester of every job and on cancel, retry and pause events.
+- `RADFETCH_API_TOKEN` is still accepted as one shared operator token.
+- `/healthz` is always open.
+
+### TLS for DICOM
+
+Set `RADFETCH_TLS_CA_FILE`, `RADFETCH_TLS_CERT_FILE` and `RADFETCH_TLS_KEY_FILE` (PEM), then:
+
+- `RADFETCH_PACS_TLS=true` for TLS towards the PACS and on the C-MOVE storage SCP.
+- `RADFETCH_SCP_TLS=true` for TLS on the push ingress. With a CA file set, senders must present a certificate signed by it.
+- `tls: true` on a `dicom` destination in a flow for TLS when delivering results.
 
 ## How the PACS is protected
 
@@ -164,5 +185,6 @@ add the next numbered file; never edit one that has been applied.
 
 ## Not built yet
 
-- Per-user accounts on the API and UI (there is one shared token).
-- TLS on the storage SCP and on DIMSE connections.
+- Single sign-on or passwords for the UI (it asks for a token).
+- Per-flow or per-batch permissions: every operator can act on every job.
+- TLS on the HTTP API itself: terminate it in a reverse proxy.

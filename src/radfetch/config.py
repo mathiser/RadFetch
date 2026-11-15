@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     acse_timeout_s: float = 30
     network_timeout_s: float = 120
 
+    # --- TLS for DICOM connections ---------------------------------------------
+    # CA bundle used to verify peers; our own certificate and key (PEM).
+    tls_ca_file: Path | None = None
+    tls_cert_file: Path | None = None
+    tls_key_file: Path | None = None
+    # Use TLS towards the PACS (C-FIND, C-GET, C-MOVE) and on the C-MOVE storage SCP.
+    pacs_tls: bool = False
+    # Use TLS on the push ingress SCP. With tls_ca_file set, senders need a client certificate.
+    scp_tls: bool = False
+
     # --- PACS protection ---------------------------------------------------
     # Average instances per minute the gateway may pull. 0 disables the limit.
     rate_instances_per_min: float = 600
