@@ -77,6 +77,13 @@ class DockerRuntime:
         digests = image.attrs.get("RepoDigests") or []
         return digests[0] if digests else image.id
 
+    def list_run_ids(self) -> list[str]:
+        try:
+            containers = self.client.containers.list(all=True, filters={"label": LABEL_RUN})
+        except DockerException as exc:
+            raise RuntimeError_(str(exc)) from exc
+        return [c.labels[LABEL_RUN] for c in containers if LABEL_RUN in c.labels]
+
     def exit_code(self, handle: str) -> int | None:
         try:
             container = self.client.containers.get(handle)

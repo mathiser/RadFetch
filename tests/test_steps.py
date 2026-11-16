@@ -61,13 +61,23 @@ def pipe(conn, settings, pacs, tmp_path):
     return job
 
 
-def executor(conn, settings, runtime):
+def executor(conn, settings, runtime, kind="any"):
+    settings = settings.model_copy(update={"executor_kind": kind})
     return Executor(conn, runtime, settings, sleep=lambda s: None)
+
+
+def run_all(ex):
+    """An executor runs one step per call; keep going until it finds nothing to do."""
+    n = 0
+    while ex.step():
+        n += 1
+        assert n < 50
+    return n
 
 
 def test_steps_run_in_dependency_order_with_outputs_wired(conn, settings, pipe, tmp_path):
     runtime = FakeRuntime(behave)
-    executor(conn, settings, runtime).step()
+    run_all(executor(conn, settings, runtime))
     specs = {s.step: s for s in runtime.started}
     assert [s.step for s in runtime.started] == ["segment", "measure", "report"]
 
@@ -107,19 +117,17 @@ def test_failed_step_is_retried_without_repeating_earlier_steps(conn, settings, 
     runtime = FakeRuntime(flaky)
     ex = executor(conn, settings, runtime)
     ex.step()
-    assert store.get_job(conn, pipe)["state"] == "ready"
+    ex.step()
+    assert store.get_job(conn, pipe)["state"] == "running"
     assert "step measure: container exited with code 1" in store.get_job(conn, pipe)["error"]
-    ex.step()
-    ex.step()
-    assert store.get_job(conn, pipe)["state"] == "sending"
+    run_all(ex)
+    assert store.get_job(conn, pipe)["state"] == "sending" and store.get_job(conn, pipe)["error"] is None
     assert [s.step for s in runtime.started] == ["segment", "measure", "measure", "measure", "report"]
 
 
 def test_job_fails_when_a_step_runs_out_of_attempts_and_retry_resumes_there(conn, settings, pipe):
     broken = FakeRuntime(lambda spec: 7 if spec.step == "report" else behave(spec))
-    ex = executor(conn, settings, broken)
-    while ex.step():
-        pass
+    run_all(executor(conn, settings, broken))
     row = store.get_job(conn, pipe)
     assert row["state"] == "failed" and "report" in row["error"]
     assert [s.step for s in broken.started] == ["segment", "measure", "report", "report"]
@@ -130,7 +138,7 @@ def test_job_fails_when_a_step_runs_out_of_attempts_and_retry_resumes_there(conn
     while gateway.step():
         pass
     fixed = FakeRuntime(behave)
-    executor(conn, settings, fixed).step()
+    run_all(executor(conn, settings, fixed))
     assert [s.step for s in fixed.started] == ["report"]
     assert store.get_job(conn, pipe)["state"] == "sending"
 
@@ -142,7 +150,7 @@ def test_job_fails_when_a_step_runs_out_of_attempts_and_retry_resumes_there(conn
     while gateway.step():
         pass
     again = FakeRuntime(behave)
-    executor(conn, settings, again).step()
+    run_all(executor(conn, settings, again))
     assert [s.step for s in again.started] == ["segment", "measure", "report"]
 
 
@@ -151,23 +159,26 @@ def test_executor_crash_mid_pipeline_adopts_the_step_and_continues(conn, setting
         return None if spec.step == "measure" else behave(spec)
 
     runtime = FakeRuntime(hang_on_measure)
+    executor(conn, settings, runtime).step()  # segment
     with pytest.raises(ZeroDivisionError):
-        Executor(conn, runtime, settings, sleep=lambda s: 1 / 0).step()
-    conn.execute("update jobs set lease_expires_at = now() - interval '1 second' where id = %s", (pipe,))
+        Executor(conn, runtime, settings, sleep=lambda s: 1 / 0).step()  # dies while measure runs
+    conn.execute("update job_steps set lease_expires_at = now() - interval '1 second' where job_id = %s", (pipe,))
     spec = next(s for s in runtime.started if s.step == "measure")
     behave(spec)  # the container finishes while nobody is watching
     runtime.containers[spec.run_id]["exit"] = 0
     runtime.behavior = behave
-    executor(conn, settings, runtime).step()
+    run_all(executor(conn, settings, runtime))
     assert store.get_job(conn, pipe)["state"] == "sending"
     assert [s.step for s in runtime.started] == ["segment", "measure", "report"]  # measure was not started twice
 
 
 def test_cancel_during_a_step_stops_the_pipeline(conn, settings, pipe):
     runtime = FakeRuntime(lambda spec: None if spec.step == "measure" else behave(spec))
-    Executor(conn, runtime, settings, sleep=lambda s: store.cancel_job(conn, pipe)).step()
+    ex = Executor(conn, runtime, settings, sleep=lambda s: store.cancel_job(conn, pipe))
+    run_all(ex)
     assert store.get_job(conn, pipe)["state"] == "cancelled"
     assert [s.step for s in runtime.started] == ["segment", "measure"]
+    assert runtime.containers == {}  # the running container was stopped and removed
 
 
 def test_single_image_flows_are_one_step_named_main(settings):

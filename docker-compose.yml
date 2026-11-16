@@ -55,15 +55,32 @@ services:
     ports:
       - "11113:11113" # storage SCP, used only with RADFETCH_RETRIEVE_MODE=move
 
-  executor: # one instance per GPU
+  # Executors take one step at a time each. Root-equivalent access to the host through the
+  # Docker socket: consider a socket proxy that only allows container create, start,
+  # inspect, list, logs, kill and remove.
+  executor-gpu: # takes steps marked gpu. One instance per GPU (see docs/administration.md)
     <<: *app
     command: executor
+    environment:
+      <<: *env
+      RADFETCH_EXECUTOR_KIND: gpu
     volumes:
       - ./data:/data
       - ./flows:/flows:ro
-      # Root-equivalent access to the host. Consider a socket proxy that only allows
-      # container create/start/inspect/logs/kill/remove.
       - /var/run/docker.sock:/var/run/docker.sock
+
+  executor-cpu: # takes every other step. Each replica runs one container at a time
+    <<: *app
+    command: executor
+    environment:
+      <<: *env
+      RADFETCH_EXECUTOR_KIND: cpu
+    volumes:
+      - ./data:/data
+      - ./flows:/flows:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      replicas: 2
 
   sender:
     <<: *app

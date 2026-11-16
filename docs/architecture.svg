@@ -93,9 +93,9 @@
   <text class="p" x="600" y="374" text-anchor="middle">once, however many flows use it</text>
 
   <rect class="svc" x="735" y="310" width="200" height="84" rx="8"/>
-  <text class="h" x="835" y="336" text-anchor="middle">executor</text>
-  <text class="p" x="835" y="356" text-anchor="middle">runs one container at a</text>
-  <text class="p" x="835" y="374" text-anchor="middle">time · one per GPU</text>
+  <text class="h" x="835" y="336" text-anchor="middle">executors</text>
+  <text class="p" x="835" y="356" text-anchor="middle">GPU and CPU executors</text>
+  <text class="p" x="835" y="374" text-anchor="middle">each takes one step at a time</text>
 
   <!-- services, bottom row -->
   <rect class="svc" x="490" y="440" width="220" height="84" rx="8"/>

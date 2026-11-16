@@ -61,6 +61,7 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `RADFETCH_EXECUTOR_KIND` | `any` | Which steps this executor takes: `gpu`, `cpu` or `any`. The Compose file sets it per service |
 | `RADFETCH_GPU_DEVICE_IDS` | empty (all) | GPUs this executor hands to `gpu` flows, e.g. `0` or `0,1` |
 | `RADFETCH_CONTAINER_NETWORK` | `none` | Docker network mode for flow containers |
 | `RADFETCH_DEBUG_FAKE_GPU` | `false` | Debug only: run `gpu` flows without a GPU. Never in production |

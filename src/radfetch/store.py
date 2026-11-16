@@ -127,6 +127,14 @@ def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False, by: str | None 
             state = "queued"
             if full:
                 conn.execute("update jobs set rerun_from = now() where id = %s", (job_id,))
+                conn.execute("delete from job_steps where job_id = %s", (job_id,))  # laid out afresh
+            else:
+                # Steps that succeeded keep their output; the failed or interrupted ones go again.
+                conn.execute(
+                    "update job_steps set state = 'pending', not_before = now(), lease_owner = null,"
+                    " lease_expires_at = null where job_id = %s and state in ('failed', 'running')",
+                    (job_id,),
+                )
         conn.execute(
             "update jobs set state = %s, error = null, attempts = 0, not_before = now(), retried_at = now(),"
             " lease_owner = null, lease_expires_at = null, updated_at = now() where id = %s",
@@ -222,6 +230,22 @@ def state_counts(conn: Conn, flows: list[str] | None = None) -> dict[str, int]:
     return {row["state"]: row["n"] for row in rows}
 
 
+def waiting_steps(conn: Conn) -> dict[str, int]:
+    """Steps that could run right now if an executor of the right kind were free."""
+    rows = conn.execute(
+        "select s.gpu, count(*) as n from job_steps s join jobs j on j.id = s.job_id"
+        " left join batches b on b.id = j.batch_id"
+        " where s.state = 'pending' and j.state in ('ready', 'running') and not coalesce(b.paused, false)"
+        " and not exists (select 1 from job_steps d where d.job_id = s.job_id"
+        "                 and d.step = any(s.needs) and d.state <> 'succeeded')"
+        " group by s.gpu"
+    ).fetchall()
+    counts = {"gpu": 0, "cpu": 0}
+    for row in rows:
+        counts["gpu" if row["gpu"] else "cpu"] = row["n"]
+    return counts
+
+
 def stats_overview(conn: Conn, hours: int, flows: list[str] | None = None) -> dict[str, Any]:
     """Numbers behind the dashboard for the last `hours` hours."""
     p = {"h": hours, "f": flows}
@@ -270,6 +294,7 @@ def stats_overview(conn: Conn, hours: int, flows: list[str] | None = None) -> di
         "oldest_waiting_s": waiting["oldest_s"],
         "cache": cache,
         "status": get_status(conn),
+        "waiting_steps": waiting_steps(conn),
     }
 
 
@@ -467,37 +492,122 @@ def retrieval_failed(
 # --- executor ---------------------------------------------------------------------------
 
 
-def claim_job_to_run(conn: Conn, owner: str, lease_s: float) -> Row | None:
-    """Claim a ready job, or take over a running job whose executor stopped heartbeating.
-
-    The returned row has `prev_state`: 'ready' for fresh work, 'running' for a takeover.
-    """
+def unplanned_jobs(conn: Conn, limit: int = 20) -> list[Row]:
+    """Ready jobs whose steps have not been laid out yet."""
     return conn.execute(
-        """
-        with next as (
-            select j.id, j.state as prev_state
-            from jobs j left join batches b on b.id = j.batch_id
-            where (j.state = 'running' and j.lease_expires_at < now())
-               or (j.state = 'ready' and j.not_before <= now() and not coalesce(b.paused, false))
-            order by (j.state = 'running') desc, j.priority desc, j.created_at
-            for update of j skip locked limit 1)
-        update jobs j set state = 'running', lease_owner = %(owner)s,
-                          lease_expires_at = now() + make_interval(secs => %(lease)s), updated_at = now()
-        from next where j.id = next.id
-        returning j.*, next.prev_state
-        """,
-        {"owner": owner, "lease": lease_s},
-    ).fetchone()
+        "select j.* from jobs j left join batches b on b.id = j.batch_id"
+        " where j.state = 'ready' and not coalesce(b.paused, false)"
+        " and not exists (select 1 from job_steps s where s.job_id = j.id)"
+        " order by j.priority desc, j.created_at limit %s",
+        (limit,),
+    ).fetchall()
 
 
-def renew_job_lease(conn: Conn, job_id: uuid.UUID, owner: str, lease_s: float) -> bool:
-    """Heartbeat. False means the job was cancelled or taken over: stop working on it."""
+def plan_job(conn: Conn, job_id: uuid.UUID, steps: list[tuple[str, bool, list[str]]]) -> None:
+    """Lay out a job's steps as (name, needs a GPU, steps it reads from). Safe to repeat."""
+    with conn.transaction():
+        for name, gpu, needs in steps:
+            conn.execute(
+                "insert into job_steps (job_id, step, gpu, needs) values (%s, %s, %s, %s) on conflict do nothing",
+                (job_id, name, gpu, needs),
+            )
+
+
+def claim_step(conn: Conn, owner: str, lease_s: float, kind: str = "any") -> Row | None:
+    """Claim one runnable step for an executor of the given kind ('gpu', 'cpu' or 'any').
+
+    Runnable means: pending, every step it reads from has succeeded, and its job is ready
+    or running and not paused. A running step whose executor stopped heartbeating is taken
+    over first. The row has `prev_state`: 'pending' for fresh work, 'running' for a takeover.
+    One-off jobs go before pushed jobs before batch jobs, at step level.
+    """
+    with conn.transaction():
+        row = conn.execute(
+            """
+            with next as (
+                select s.job_id, s.step, s.state as prev_state
+                from job_steps s join jobs j on j.id = s.job_id left join batches b on b.id = j.batch_id
+                where (%(kind)s = 'any' or s.gpu = (%(kind)s = 'gpu'))
+                  and ((s.state = 'running' and s.lease_expires_at < now() and j.state = 'running')
+                    or (s.state = 'pending' and s.not_before <= now() and j.state in ('ready', 'running')
+                        and not coalesce(b.paused, false)
+                        and not exists (select 1 from job_steps d where d.job_id = s.job_id
+                                        and d.step = any(s.needs) and d.state <> 'succeeded')))
+                order by (s.state = 'running') desc, j.priority desc, j.created_at, s.step
+                for update of s skip locked limit 1)
+            update job_steps s set state = 'running', lease_owner = %(owner)s,
+                                   lease_expires_at = now() + make_interval(secs => %(lease)s)
+            from next where s.job_id = next.job_id and s.step = next.step
+            returning s.*, next.prev_state
+            """,
+            {"owner": owner, "lease": lease_s, "kind": kind},
+        ).fetchone()
+        if row is not None and row["prev_state"] == "pending":
+            # The job counts as running from the moment its first step is taken.
+            conn.execute(
+                "update jobs set state = 'running', updated_at = now() where id = %s and state = 'ready'",
+                (row["job_id"],),
+            )
+        return row
+
+
+def renew_step_lease(conn: Conn, job_id: uuid.UUID, step: str, owner: str, lease_s: float) -> str:
+    """Heartbeat. 'ok' to carry on; 'taken' if another executor now has the step (leave the
+    container to it); 'stopped' if the job was cancelled or failed (stop the container)."""
     cur = conn.execute(
-        "update jobs set lease_expires_at = now() + make_interval(secs => %s)"
-        " where id = %s and state = 'running' and lease_owner = %s",
-        (lease_s, job_id, owner),
+        "update job_steps s set lease_expires_at = now() + make_interval(secs => %s) from jobs j"
+        " where j.id = s.job_id and j.state = 'running' and s.job_id = %s and s.step = %s"
+        " and s.state = 'running' and s.lease_owner = %s",
+        (lease_s, job_id, step, owner),
     )
-    return cur.rowcount == 1
+    if cur.rowcount == 1:
+        return "ok"
+    row = conn.execute(
+        "select j.state as job_state, s.state, s.lease_owner from job_steps s join jobs j on j.id = s.job_id"
+        " where s.job_id = %s and s.step = %s",
+        (job_id, step),
+    ).fetchone()
+    if row and row["job_state"] == "running" and row["state"] == "running" and row["lease_owner"] != owner:
+        return "taken"
+    return "stopped"
+
+
+def release_step(conn: Conn, job_id: uuid.UUID, step: str, owner: str, delay_s: float = 0) -> None:
+    """Give a claimed step back without it counting as an attempt."""
+    conn.execute(
+        "update job_steps set state = 'pending', lease_owner = null, lease_expires_at = null,"
+        " not_before = now() + make_interval(secs => %s) where job_id = %s and step = %s and lease_owner = %s",
+        (delay_s, job_id, step, owner),
+    )
+
+
+def reset_step(conn: Conn, job_id: uuid.UUID, step: str) -> None:
+    """A succeeded step's output is gone from disk: it has to run again."""
+    conn.execute(
+        "update job_steps set state = 'pending', run_id = null, not_before = now()"
+        " where job_id = %s and step = %s and state = 'succeeded'",
+        (job_id, step),
+    )
+
+
+def job_steps(conn: Conn, job_id: uuid.UUID) -> list[Row]:
+    return conn.execute(
+        "select step, state, gpu, needs, run_id, lease_owner from job_steps where job_id = %s order by step",
+        (job_id,),
+    ).fetchall()
+
+
+def jobs_to_finish(conn: Conn, idle_s: float) -> list[Row]:
+    """Running jobs whose steps have all succeeded but which were not finished, e.g. because
+    the executor died between its last step and queuing the deliveries."""
+    return conn.execute(
+        "select j.* from jobs j where j.state = 'running'"
+        " and exists (select 1 from job_steps s where s.job_id = j.id)"
+        " and not exists (select 1 from job_steps s where s.job_id = j.id and s.state <> 'succeeded')"
+        " and (select max(r.finished_at) from runs r where r.job_id = j.id) < now() - make_interval(secs => %s)"
+        " limit 5",
+        (idle_s,),
+    ).fetchall()
 
 
 def job_series_uids(conn: Conn, job_id: uuid.UUID) -> list[str]:
@@ -507,9 +617,11 @@ def job_series_uids(conn: Conn, job_id: uuid.UUID) -> list[str]:
     return [row["series_instance_uid"] for row in rows]
 
 
-def latest_run(conn: Conn, job_id: uuid.UUID) -> Row | None:
+def latest_run(conn: Conn, job_id: uuid.UUID, step: str | None = None) -> Row | None:
     return conn.execute(
-        "select * from runs where job_id = %s order by attempt desc limit 1", (job_id,)
+        "select * from runs where job_id = %(job)s and (%(step)s::text is null or step = %(step)s)"
+        " order by attempt desc limit 1",
+        {"job": job_id, "step": step},
     ).fetchone()
 
 
@@ -530,21 +642,36 @@ def create_run(conn: Conn, job_id: uuid.UUID, image: str, step: str = "main") ->
     return run
 
 
-def step_succeeded(conn: Conn, job_id: uuid.UUID, run_id: uuid.UUID, step: str) -> None:
+def step_succeeded(conn: Conn, job_id: uuid.UUID, step: str, run_id: uuid.UUID, owner: str) -> bool:
+    """Record a step's success. Returns True when that was the job's last outstanding step,
+    in which case the caller finishes the job.
+
+    The job row is locked first, so of two executors completing the last two steps at the
+    same moment exactly one is told the job is complete.
+    """
     with conn.transaction():
+        conn.execute("select 1 from jobs where id = %s for update", (job_id,))
+        cur = conn.execute(
+            "update job_steps set state = 'succeeded', run_id = %s, lease_owner = null, lease_expires_at = null"
+            " where job_id = %s and step = %s and state = 'running' and lease_owner = %s",
+            (run_id, job_id, step, owner),
+        )
+        if cur.rowcount == 0:
+            return False
         finish_run(conn, run_id, "succeeded", 0)
         log_event(conn, job_id, "run_succeeded", run=str(run_id), **({} if step == "main" else {"step": step}))
+        left = conn.execute(
+            "select count(*) as n from job_steps where job_id = %s and state <> 'succeeded'", (job_id,)
+        ).fetchone()["n"]
+        return left == 0
 
 
 def succeeded_steps(conn: Conn, job_id: uuid.UUID) -> dict[str, uuid.UUID]:
-    """step name -> its latest successful run, ignoring runs from before a full retry."""
+    """step name -> the run that succeeded."""
     rows = conn.execute(
-        "select distinct on (r.step) r.step, r.id from runs r join jobs j on j.id = r.job_id"
-        " where r.job_id = %s and r.state = 'succeeded' and r.started_at >= coalesce(j.rerun_from, '-infinity')"
-        " order by r.step, r.attempt desc",
-        (job_id,),
+        "select step, run_id from job_steps where job_id = %s and state = 'succeeded'", (job_id,)
     ).fetchall()
-    return {row["step"]: row["id"] for row in rows}
+    return {row["step"]: row["run_id"] for row in rows}
 
 
 def set_run_image_digest(conn: Conn, run_id: uuid.UUID, digest: str | None) -> None:
@@ -573,9 +700,8 @@ def run_manifest(conn: Conn, run_id: uuid.UUID) -> dict[str, Any]:
         (row["job_id"],),
     ).fetchall()
     steps = conn.execute(
-        "select distinct on (r.step) r.step, r.id as run_id, r.image, r.image_digest, r.finished_at from runs r"
-        " join jobs j on j.id = r.job_id where r.job_id = %s and r.state = 'succeeded'"
-        " and r.started_at >= coalesce(j.rerun_from, '-infinity') order by r.step, r.attempt desc",
+        "select s.step, r.id as run_id, r.image, r.image_digest, r.finished_at from job_steps s"
+        " join runs r on r.id = s.run_id where s.job_id = %s and s.state = 'succeeded' order by s.step",
         (row["job_id"],),
     ).fetchall()
     return {**row, "input_series": series, "steps": steps}
@@ -606,10 +732,9 @@ def finish_run(conn: Conn, run_id: uuid.UUID, state: str, exit_code: int | None 
     )
 
 
-def run_succeeded(
+def finish_job(
     conn: Conn,
     job_id: uuid.UUID,
-    owner: str,
     deliveries: list[tuple[uuid.UUID, dict]],
     result_run_id: uuid.UUID | None = None,
     result: Any = None,
@@ -619,16 +744,20 @@ def run_succeeded(
 
     `deliveries` pairs the run whose output is sent with a destination. `result` is the
     flow's structured result document, stored in the same transaction; `result_problem`
-    says why a result file was not stored.
+    says why a result file was not stored. Safe to call twice: the second call does nothing.
     """
     with conn.transaction():
-        cur = conn.execute(
-            "update jobs set state = %s, error = null, lease_owner = null, lease_expires_at = null, updated_at = now()"
-            " where id = %s and state = 'running' and lease_owner = %s",
-            ("sending" if deliveries else "done", job_id, owner),
-        )
-        if cur.rowcount == 0:
+        job = conn.execute("select state from jobs where id = %s for update", (job_id,)).fetchone()
+        unfinished = conn.execute(
+            "select 1 from job_steps where job_id = %s and state <> 'succeeded' limit 1", (job_id,)
+        ).fetchone()
+        if job is None or job["state"] != "running" or unfinished:
             return False
+        conn.execute(
+            "update jobs set state = %s, error = null, lease_owner = null, lease_expires_at = null, updated_at = now()"
+            " where id = %s",
+            ("sending" if deliveries else "done", job_id),
+        )
         conn.execute("delete from deliveries where job_id = %s", (job_id,))  # from before a rerun
         for run_id, dest in deliveries:
             conn.execute(
@@ -684,30 +813,37 @@ def result_flows(conn: Conn, flows: list[str] | None = None) -> list[Row]:
     ).fetchall()
 
 
-def run_failed(
+def step_failed(
     conn: Conn,
     job_id: uuid.UUID,
+    step: str,
     run_id: uuid.UUID,
     owner: str,
     error: str,
     exit_code: int | None,
     retry: bool,
     delay_s: float,
-    run_state: str = "failed",
 ) -> None:
-    """running -> ready (retry after a delay) or -> failed."""
+    """A step's run failed: the step waits for another attempt, or the whole job fails.
+
+    When the job fails, other executors running its steps see that at their next heartbeat
+    and stop their containers.
+    """
     with conn.transaction():
-        finish_run(conn, run_id, run_state, exit_code, error)
+        finish_run(conn, run_id, "failed", exit_code, error)
         cur = conn.execute(
-            "update jobs set state = %s, error = %s, lease_owner = null, lease_expires_at = null,"
-            " not_before = now() + make_interval(secs => %s), updated_at = now()"
-            " where id = %s and state = 'running' and lease_owner = %s",
-            ("ready" if retry else "failed", error, delay_s, job_id, owner),
+            "update job_steps set state = %s, lease_owner = null, lease_expires_at = null,"
+            " not_before = now() + make_interval(secs => %s)"
+            " where job_id = %s and step = %s and state = 'running' and lease_owner = %s",
+            ("pending" if retry else "failed", delay_s, job_id, step, owner),
         )
-        if cur.rowcount:
-            log_event(conn, job_id, "run_failed", run=str(run_id), error=error, exit_code=exit_code, retry=retry)
-            if not retry:
-                log_event(conn, job_id, "failed", error=error)
+        if cur.rowcount == 0:
+            return
+        log_event(conn, job_id, "run_failed", run=str(run_id), error=error, exit_code=exit_code, retry=retry)
+        if retry:
+            conn.execute("update jobs set error = %s where id = %s and state = 'running'", (error, job_id))
+        else:
+            fail_job(conn, job_id, error)
 
 
 def delete_run(conn: Conn, run_id: uuid.UUID) -> None:
@@ -724,22 +860,42 @@ def count_runs(conn: Conn, job_id: uuid.UUID, step: str | None = None) -> int:
     ).fetchone()["n"]
 
 
-def requeue_for_retrieval(conn: Conn, job_id: uuid.UUID, owner: str, missing: list[str]) -> None:
-    """Cache files were missing when the run was prepared: fetch them again. running -> retrieving."""
+def requeue_for_retrieval(conn: Conn, job_id: uuid.UUID, step: str, owner: str, missing: list[str]) -> bool:
+    """Cache files were missing when a step was prepared: fetch them again. running -> retrieving.
+
+    Returns False, changing nothing, when other steps of the job are running: taking the job
+    out of 'running' would stop them. The caller then treats it as a failed attempt.
+    """
     with conn.transaction():
+        conn.execute("select 1 from jobs where id = %s for update", (job_id,))
+        others = conn.execute(
+            "select 1 from job_steps where job_id = %s and step <> %s and state = 'running' limit 1", (job_id, step)
+        ).fetchone()
+        if others:
+            return False
+        release_step(conn, job_id, step, owner)
         cur = conn.execute(
-            "update jobs set state = 'retrieving', lease_owner = null, lease_expires_at = null, updated_at = now()"
-            " where id = %s and state = 'running' and lease_owner = %s",
-            (job_id, owner),
+            "update jobs set state = 'retrieving', updated_at = now() where id = %s and state = 'running'", (job_id,)
         )
         if cur.rowcount == 0:
-            return
+            return True
         conn.execute(
             "update retrievals set state = 'pending', attempts = 0, not_before = now(), error = null"
             " where series_instance_uid = any(%s) and state in ('staged','evicted','failed')",
             (missing,),
         )
         log_event(conn, job_id, "cache_miss", series=missing)
+    return True
+
+
+def run_state(conn: Conn, run_id: uuid.UUID) -> str | None:
+    row = conn.execute("select state from runs where id = %s", (run_id,)).fetchone()
+    return row["state"] if row else None
+
+
+def prune_status(conn: Conn, older_than_hours: float = 24) -> None:
+    """Forget heartbeats of workers that are long gone."""
+    conn.execute("delete from status where updated_at < now() - make_interval(secs => %s * 3600.0)", (older_than_hours,))
 
 
 # --- sender -------------------------------------------------------------------------------
@@ -976,6 +1132,7 @@ def metrics(conn: Conn) -> dict[str, Any]:
         "   where state not in ('done','failed','cancelled'))::float as oldest_active_job_s,"
         " (select count(*) from incoming_studies) as incoming_studies"
     ).fetchone()
+    extra["waiting_steps"] = waiting_steps(conn)
     return {
         "jobs": by_state("jobs"),
         "retrievals": by_state("retrievals"),

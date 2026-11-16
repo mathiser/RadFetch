@@ -141,6 +141,9 @@ class FakeRuntime:
     def image_digest(self, handle):
         return "registry.example/seg@sha256:abc"
 
+    def list_run_ids(self):
+        return list(self.containers)
+
     def exit_code(self, handle):
         return self.containers[handle]["exit"]
 

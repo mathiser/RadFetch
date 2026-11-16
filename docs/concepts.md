@@ -23,7 +23,8 @@ Both paths end in the same place: series in the local cache and a job ready for 
 | `api` | HTTP API and web UI | 1 |
 | `gateway` | The only process that talks to the PACS | 1 active (extra replicas stand by) |
 | `scp` | Push ingress (storage SCP) | 0 or 1 |
-| `executor` | Runs one flow container at a time | 1 per GPU |
+| `executor-gpu` | Runs steps marked `gpu`, one at a time | 1 per GPU |
+| `executor-cpu` | Runs every other step, one at a time each | as many as the host's CPU and memory allow |
 | `sender` | Delivers results; retried independently of inference | 1 |
 | `janitor` | Evicts unused cached series, removes old run files | 1 |
 
@@ -49,8 +50,8 @@ queued ─> retrieving ─> ready ─> running ─> sending ─> done
 |---|---|---|
 | `queued` | Waiting for the gateway to look the study up in the PACS | gateway |
 | `retrieving` | Study found; waiting for its series to be fetched | gateway |
-| `ready` | All series are in the cache; waiting for the executor | executor |
-| `running` | The flow's container is running | executor |
+| `ready` | All series are in the cache; no step has started yet | executor |
+| `running` | At least one step has started. The job stays `running` between steps and while a step waits to be retried | executor |
 | `sending` | The run succeeded; results are being delivered | sender |
 | `done` | All deliveries succeeded | |
 | `failed` | Gave up; the job's `error` says why. Can be retried | you |
@@ -81,12 +82,15 @@ circuit breaker.
 ## Priorities
 
 One-off jobs run first, then pushed jobs, then batch jobs. Priority applies both
-when fetching and when the executor picks its next job. A running container is
-never interrupted for a more urgent job.
+when fetching and when an executor picks its next step, so an urgent job's steps
+go ahead of the remaining steps of batch jobs. A running container is never
+interrupted for a more urgent job.
 
 ## Crash safety
 
 Workers claim work with a lease. If a worker dies, its lease expires and the work
-becomes claimable again; nothing needs cleaning up. After an executor crash or
-restart, the next executor finds the container that was running and waits for it
-instead of starting inference again.
+becomes claimable again; nothing needs cleaning up. Executors claim one step at a
+time: after an executor crash or restart, another executor of the same kind finds
+the container that was running and waits for it instead of starting the step
+again, and a job whose last step finished just as its executor died is completed
+by another executor.

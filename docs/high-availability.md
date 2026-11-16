@@ -19,7 +19,8 @@ what is not, and what a cluster needs.
 | `scp` (push ingress) | Any number receive; one turns studies into jobs | Another takes over. A sender whose connection was cut must resend that study |
 | `sender` | Any number | The others continue; an interrupted delivery is retried |
 | `janitor` | 1 | Cleanup pauses until it is restarted. Nothing breaks |
-| `executor` | One per GPU, on the node that has the GPU | See below |
+| `executor-gpu` | One per GPU, on the node that has the GPU | See below |
+| `executor-cpu` | Any number, on any node | Its step is run again by another CPU executor after the lease expires |
 | `postgres` | **Not redundant in the example stack** | Everything pauses until it is back, then continues |
 
 ## Limits to be aware of
@@ -29,10 +30,10 @@ on one node. For real high availability, use a replicated Postgres (Patroni,
 CloudNativePG, or a managed service) and point `RADFETCH_DATABASE_URL` at it.
 All services reconnect by themselves when the database comes back or fails over.
 
-**Running inference does not move.** A flow container runs on the node whose
+**A running step does not move.** A flow container runs on the node whose
 executor started it. If that node is lost, the container is lost; after the
-executor's lease expires (two minutes) another executor runs the job again from
-the start. If only the executor service restarts and the node stays up, the
+executor's lease expires (two minutes) another executor of the same kind runs
+that step again. Steps of the job that had already succeeded are kept. If only the executor service restarts and the node stays up, the
 container keeps running and is picked up again.
 
 **The data folder must be shared.** The cache, run files and incoming studies
@@ -64,7 +65,7 @@ arrangement as on a single host.
 What follows from that:
 
 - **Swarm does not see or reschedule flow containers.** They do not appear in `docker service ls`. RadFetch itself tracks them (each carries a `radfetch.run_id` label) and recovers through its leases.
-- **A job runs on the node of the executor that took it**, including every step of a multi-step flow. GPU nodes are chosen by labelling them, not per job.
+- **A step runs on the node of the executor that took it.** The steps of one job can run on different nodes: a GPU step on a GPU node, its CPU steps wherever a CPU executor is free. GPU nodes are chosen by labelling them, not per job.
 - **GPUs work as on a single host**, through the NVIDIA Container Toolkit on the node. This is the main reason for not using Swarm services: Swarm has no equivalent of handing a service task a GPU on request.
 - **The data folder must be at the same path on every node**, because the bind mounts are resolved by the node's own Docker daemon.
 - **The Docker socket is root-equivalent** on each GPU node, as on a single host.
@@ -106,7 +107,8 @@ Notes on the stack:
 - Services start in any order. Until the `init-db` service has applied the schema, the others log database errors and retry; this settles within seconds.
 - `init-db` runs once and exits; `docker service ls` shows it as `0/1`, which is expected.
 - Secrets (database password, DICOMweb token) are plain environment variables in the example. Use Docker secrets or your own mechanism in production.
-- For a multi-GPU node, run one executor service per GPU with `RADFETCH_GPU_DEVICE_IDS`, as described in [Administration](administration.md).
+- For a multi-GPU node, run one GPU executor service per GPU with `RADFETCH_GPU_DEVICE_IDS`, as described in [Administration](administration.md).
+- `executor-cpu` runs on any node. To keep CPU steps off certain nodes, add a placement constraint to it.
 
 ## What has been tested
 

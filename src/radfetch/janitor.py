@@ -45,6 +45,7 @@ class Janitor:
         promoted = store.promote_ready_jobs(self.conn)
         if promoted:
             log.warning("%d job(s) had all series staged but were still waiting; moved to ready", promoted)
+        store.prune_status(self.conn)
         purged = self._purge_runs()
         if evicted or purged:
             log.info("evicted %d series, purged %d run directories", evicted, purged)

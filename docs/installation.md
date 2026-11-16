@@ -33,7 +33,7 @@ before, do the [Tutorial](tutorial.md) first.
 - [ ] Change the Postgres password in `docker-compose.yml` (both in `postgres` and in `RADFETCH_DATABASE_URL`).
 - [ ] If the modalities or PACS require TLS, mount the certificates and set the `RADFETCH_TLS_*` settings (see [Connecting a PACS](pacs.md)).
 - [ ] Optionally set `RADFETCH_NOTIFY_WEBHOOK_URL` to be told about failures and finished batches (see [Administration](administration.md)).
-- [ ] Make sure `RADFETCH_DEBUG_FAKE_GPU` is **not** set. With several GPUs, run one executor per GPU with `RADFETCH_GPU_DEVICE_IDS`.
+- [ ] Make sure `RADFETCH_DEBUG_FAKE_GPU` is **not** set. With several GPUs, run one GPU executor per GPU with `RADFETCH_GPU_DEVICE_IDS`; set the number of CPU executors to what the host can carry (see [Administration](administration.md)).
 - [ ] If the push ingress is not used, remove the `scp` service; if it is, set `RADFETCH_SCP_ALLOWED_AE_TITLES`.
 
 ## 4. Flows

@@ -91,9 +91,13 @@ services:
     deploy:
       replicas: 1
 
-  executor: # one per GPU node; starts flow containers on its own node
+  # Executors start flow containers on their own node, one step at a time each.
+  executor-gpu: # takes steps marked gpu; one per GPU node
     <<: *radfetch
     command: executor
+    environment:
+      <<: *env
+      RADFETCH_EXECUTOR_KIND: gpu
     volumes:
       - ${RADFETCH_ROOT:-/srv/radfetch}/data:/data
       - ${RADFETCH_ROOT:-/srv/radfetch}/flows:/flows:ro
@@ -102,6 +106,19 @@ services:
       mode: global
       placement:
         constraints: [node.labels.radfetch.gpu == true]
+
+  executor-cpu: # takes every other step, on any node
+    <<: *radfetch
+    command: executor
+    environment:
+      <<: *env
+      RADFETCH_EXECUTOR_KIND: cpu
+    volumes:
+      - ${RADFETCH_ROOT:-/srv/radfetch}/data:/data
+      - ${RADFETCH_ROOT:-/srv/radfetch}/flows:/flows:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      replicas: 2
 
 volumes:
   pgdata:

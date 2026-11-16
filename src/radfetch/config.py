@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     idle_sleep_s: float = 2
     executor_poll_s: float = 2
     container_network: str = "none"
+    # Which steps this executor takes. gpu: only steps marked gpu. cpu: only the others.
+    # any: both (the right choice when a single executor does everything).
+    executor_kind: Literal["any", "gpu", "cpu"] = "any"
     # GPUs handed to gpu flows by this executor: empty for all, or device ids such as "0" or
     # "0,1". With several GPUs, run one executor per GPU, each with its own id.
     gpu_device_ids: str = ""

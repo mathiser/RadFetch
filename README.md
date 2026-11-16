@@ -11,7 +11,7 @@ number, one-off or in batches, without overloading the PACS.
 | `api` | Submit jobs and batches; pause, resume, cancel; status |
 | `gateway` | The only process that talks to the PACS. Resolves accession numbers and retrieves series into the cache |
 | `scp` | Push ingress: a storage SCP; received studies start every flow whose `trigger` matches |
-| `executor` | Runs one flow container at a time (one instance per GPU) |
+| `executor-gpu`, `executor-cpu` | Run the flows' containers, one step at a time each: GPU executors take steps marked `gpu`, CPU executors the rest |
 | `sender` | Delivers run output (C-STORE or directory), retried independently of inference |
 | `janitor` | Evicts unused cached series and old run directories |
 
@@ -48,7 +48,7 @@ Open http://localhost:8000, submit accession number `ACC0001` with the flow
 - Push ingress: studies sent by C-STORE start flows whose trigger matches
 - Retrieval by C-GET, C-MOVE or DICOMweb, fetching only the series a flow selects, each once
 - PACS protection: single association, rate budget, batch windows, bounded preloading, disk watermarks, circuit breaker
-- Flows of one or several containers, chained by mounting one step's output into the next; run through Docker with read-only inputs, no network and optional GPU
+- Flows of one or several containers, chained by mounting one step's output into the next; GPU and CPU executors share the work step by step, so independent steps run in parallel and the GPU is not held during CPU steps; run through Docker with read-only inputs, no network and optional GPU
 - Delivery by C-STORE, STOW-RS or to a directory, retried independently of inference
 - Web interface with dashboards, HTTP API, Prometheus metrics, webhook notifications
 - User accounts with five roles, individually adjustable permissions and per-flow restrictions; audit log

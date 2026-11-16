@@ -222,7 +222,7 @@ def test_failed_run_is_retried_then_fails(conn, settings, pacs):
     runtime = FakeRuntime(lambda spec: 3)
     executor = make_executor(conn, runtime, settings)
     executor.step()
-    assert state(conn, job) == "ready"  # attempt 1 of 2 failed
+    assert state(conn, job) == "running"  # attempt 1 of 2 failed; the step waits for its next attempt
     executor.step()
     row = store.get_job(conn, job)
     assert row["state"] == "failed" and "exited with code 3" in row["error"]
@@ -237,7 +237,7 @@ def test_timeout_kills_container(conn, settings, pacs):
     executor = make_executor(conn, runtime, settings, clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + 4000))
     executor.step()
     row = store.get_job(conn, job)
-    assert row["state"] == "ready" and "timed out" in row["error"]
+    assert row["state"] == "running" and "timed out" in row["error"]
     assert runtime.containers == {}
 
 
@@ -270,7 +270,7 @@ def test_executor_crash_adopts_running_container(conn, settings, pacs):
 
     survivor = make_executor(conn, runtime, settings)
     assert not survivor.step()  # lease still valid: hands off
-    conn.execute("update jobs set lease_expires_at = now() - interval '1 second' where id = %s", (job,))
+    conn.execute("update job_steps set lease_expires_at = now() - interval '1 second' where job_id = %s", (job,))
     handle = next(iter(runtime.containers))
     (runtime.started[0].output_dir / "result.txt").write_text("finished while unattended")
     runtime.containers[handle]["exit"] = 0
@@ -286,7 +286,7 @@ def test_executor_crash_with_lost_container_reruns(conn, settings, pacs):
     with pytest.raises(ZeroDivisionError):
         make_executor(conn, runtime, settings, sleep=lambda s: 1 / 0).step()
     runtime.containers.clear()  # e.g. host reboot
-    conn.execute("update jobs set lease_expires_at = now() - interval '1 second' where id = %s", (job,))
+    conn.execute("update job_steps set lease_expires_at = now() - interval '1 second' where job_id = %s", (job,))
     runtime.behavior = FakeRuntime.write_result
     make_executor(conn, runtime, settings).step()
     assert state(conn, job) == "sending"

@@ -1,4 +1,10 @@
-"""The executor: runs one flow container at a time (one worker process = one GPU)."""
+"""The executor: runs one step's container at a time.
+
+Executors claim single steps, not whole jobs. A `gpu` executor takes steps marked
+gpu, a `cpu` executor takes the others, and `any` takes both. Steps of one job can
+therefore run on different executors, and independent steps at the same time. One
+executor process is one slot: run more processes for more parallel work.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +19,9 @@ from typing import Callable
 
 from radfetch import store
 from radfetch.config import Settings
-from radfetch.loop import run_steps
 from radfetch.executor.runtime import ContainerSpec, Runtime, RuntimeError_
 from radfetch.flows import SERIES, Flow, FlowError, Step, load_flow
+from radfetch.loop import run_steps
 
 log = logging.getLogger("radfetch.executor")
 
@@ -37,85 +43,152 @@ class Executor:
         sleep: Callable[[float], None] = time.sleep,
     ):
         self.conn, self.runtime, self.s = conn, runtime, settings
+        self.kind = settings.executor_kind
         self.owner = f"executor-{socket.gethostname()}-{os.getpid()}"
         self._clock, self._sleep = clock, sleep
+        self._last_heartbeat = self._last_reap = float("-inf")
         settings.runs_dir.mkdir(parents=True, exist_ok=True)
 
     def run_forever(self) -> None:
-        log.info("executor started as %s", self.owner)
+        log.info("executor started as %s (kind: %s)", self.owner, self.kind)
         if self.s.debug_fake_gpu:
             log.warning("RADFETCH_DEBUG_FAKE_GPU is set: gpu flows run WITHOUT a GPU. Do not use in production.")
         run_steps(self.step, self.s.idle_sleep_s, self._sleep)
 
+    # --- one unit of work --------------------------------------------------------------
+
     def step(self) -> bool:
-        job = store.claim_job_to_run(self.conn, self.owner, self.s.lease_s)
-        if job is None:
+        self._heartbeat(busy=False)
+        self._reap()
+        self._plan()
+        if self._finish_stragglers():
+            return True
+        claim = store.claim_step(self.conn, self.owner, self.s.lease_s, self.kind)
+        if claim is None:
             return False
+        self._heartbeat(busy=True, force=True)
+        job = store.get_job(self.conn, claim["job_id"])
         try:
             flow = load_flow(self.s.flows_dir, job["flow"])
         except FlowError as exc:
-            store.fail_job(self.conn, job["id"], str(exc), self.owner)
+            store.fail_job(self.conn, job["id"], str(exc))
+            return True
+        step = flow.step(claim["step"])
+        if step is None or {s for s in step.inputs if s != SERIES} != set(claim["needs"]):
+            store.fail_job(
+                self.conn, job["id"],
+                "the flow was changed while this job was running; retry it with a full rerun",
+            )
             return True
 
-        run = handle = step = None
-        if job["prev_state"] == "running":
-            # The previous executor died. Its container may still be running or have finished.
-            run, handle, step = self._adopt(job, flow)
-        # A flow's steps run one after another here; each keeps its output for the steps that read it.
-        while True:
-            if handle is None:
-                done = self._done_steps(job["id"])
-                step = next((s for s in flow.ordered_steps() if s.name not in done), None)
-                if step is None:
-                    self._finish(job, flow, done)
-                    return True
-                started = self._start(job, flow, step, done)
-                if started is None:
-                    return True
-                run, handle = started
-            if not self._supervise(job, flow, step, run, handle):
+        run = handle = None
+        if claim["prev_state"] == "running":
+            # The executor that had this step died. Its container may still be running or have finished.
+            run, handle = self._adopt(job, step)
+        if handle is None:
+            started = self._start(job, flow, step)
+            if started is None:
                 return True
-            handle = None
-            if not store.renew_job_lease(self.conn, job["id"], self.owner, self.s.lease_s):
-                return True  # cancelled between steps
+            run, handle = started
+        if self._supervise(job, flow, step, run, handle):
+            if store.step_succeeded(self.conn, job["id"], step.name, run["id"], self.owner):
+                self._finish(job, flow)
+        return True
+
+    def _heartbeat(self, busy: bool, force: bool = False) -> None:
+        """Tell the status board this executor exists, so a missing kind of executor can be noticed."""
+        if not force and self._clock() - self._last_heartbeat < 10:
+            return
+        self._last_heartbeat = self._clock()
+        store.set_status(self.conn, f"executor:{self.owner}", kind=self.kind, busy=busy)
+
+    def _reap(self) -> None:
+        """Remove containers on this node whose run is over according to the database:
+        leftovers from an upgrade, a failover, or a crash at the wrong moment."""
+        if self._clock() - self._last_reap < 600:
+            return
+        self._last_reap = self._clock()
+        try:
+            for run_id in self.runtime.list_run_ids():
+                if store.run_state(self.conn, run_id) != "running":
+                    handle = self.runtime.find(run_id)
+                    if handle:
+                        log.warning("removing leftover container of run %s", run_id)
+                        self.runtime.kill(handle)
+                        self.runtime.remove(handle)
+        except RuntimeError_ as exc:
+            log.warning("could not look for leftover containers: %s", exc)
+
+    def _plan(self) -> None:
+        """Lay out the steps of ready jobs that have none yet, so executors can claim them."""
+        for job in store.unplanned_jobs(self.conn):
+            try:
+                flow = load_flow(self.s.flows_dir, job["flow"])
+            except FlowError as exc:
+                store.fail_job(self.conn, job["id"], str(exc))
+                continue
+            store.plan_job(
+                self.conn,
+                job["id"],
+                [(s.name, s.gpu, [src for src in s.inputs if src != SERIES]) for s in flow.steps],
+            )
+
+    def _finish_stragglers(self) -> bool:
+        """Finish jobs whose steps all succeeded but whose executor died before queuing the deliveries."""
+        worked = False
+        for job in store.jobs_to_finish(self.conn, self.s.lease_s):
+            try:
+                self._finish(job, load_flow(self.s.flows_dir, job["flow"]))
+            except FlowError as exc:
+                store.fail_job(self.conn, job["id"], str(exc))
+            worked = True
+        return worked
 
     # --- start -------------------------------------------------------------------------
 
-    def _adopt(self, job, flow: Flow):
-        run = store.latest_run(self.conn, job["id"])
+    def _adopt(self, job, step: Step):
+        run = store.latest_run(self.conn, job["id"], step.name)
         if run is None or run["state"] != "running":
-            return None, None, None
+            return None, None
         handle = self.runtime.find(str(run["id"]))
-        step = flow.step(run["step"])
-        if handle is None or step is None:
-            if handle is not None:  # the flow was edited and no longer has this step
-                self.runtime.kill(handle)
-                self.runtime.remove(handle)
+        if handle is None:
             store.finish_run(self.conn, run["id"], "lost", error="container not found after executor restart")
-            return None, None, None
-        log.info("adopted container of run %s for job %s", run["id"], job["id"])
-        return run, handle, step
+            return None, None
+        log.info("adopted container of run %s (job %s, step %s)", run["id"], job["id"], step.name)
+        return run, handle
 
-    def _done_steps(self, job_id) -> dict:
-        """Steps that succeeded and whose output is still on disk: step name -> run id."""
-        done = store.succeeded_steps(self.conn, job_id)
-        return {name: run_id for name, run_id in done.items() if (self.s.runs_dir / str(run_id) / "out").is_dir()}
-
-    def _start(self, job, flow: Flow, step: Step, done: dict):
+    def _start(self, job, flow: Flow, step: Step):
         job_id = job["id"]
         attempts = flow.attempts_for(step)
         if store.count_runs(self.conn, job_id, step.name) >= attempts:
             what = "run attempts" if len(flow.steps) == 1 else f"attempts of step {step.name}"
-            store.fail_job(self.conn, job_id, f"gave up after {attempts} {what}", self.owner)
+            store.fail_job(self.conn, job_id, f"gave up after {attempts} {what}")
             return None
+
+        # The outputs this step reads must still be on disk; a step whose output is gone runs again.
+        done = store.succeeded_steps(self.conn, job_id)
+        upstream = {}
+        for source, path in step.inputs.items():
+            if source == SERIES:
+                continue
+            out = self.s.runs_dir / str(done.get(source)) / "out"
+            if source not in done or not out.is_dir():
+                store.reset_step(self.conn, job_id, source)
+                store.release_step(self.conn, job_id, step.name, self.owner)
+                log.warning("job %s: output of step %s is gone; it will run again", job_id, source)
+                return None
+            upstream[path] = out
+
         run = store.create_run(self.conn, job_id, step.image, step.name)
         run_dir = self.s.runs_dir / str(run["id"])
         try:
             input_dir, output_dir = self._prepare(job_id, run_dir, SERIES in step.inputs)
         except CacheMiss as miss:
-            store.delete_run(self.conn, run["id"])  # never started: must not count as an attempt
-            store.requeue_for_retrieval(self.conn, job_id, self.owner, miss.series)
             shutil.rmtree(run_dir, ignore_errors=True)
+            if store.requeue_for_retrieval(self.conn, job_id, step.name, self.owner, miss.series):
+                store.delete_run(self.conn, run["id"])  # never started: must not count as an attempt
+            else:
+                self._fail_run(job, flow, step, run, "the input series are missing from the cache", None)
             return None
         spec = ContainerSpec(
             run_id=str(run["id"]),
@@ -125,11 +198,7 @@ class Executor:
             command=step.command,
             input_dir=input_dir,
             input_path=step.inputs.get(SERIES, "/input"),
-            extra_inputs={
-                path: self.s.runs_dir / str(done[source]) / "out"
-                for source, path in step.inputs.items()
-                if source != SERIES
-            },
+            extra_inputs=upstream,
             output_dir=output_dir,
             env={
                 **flow.env,
@@ -183,7 +252,7 @@ class Executor:
     # --- supervise ---------------------------------------------------------------------
 
     def _supervise(self, job, flow: Flow, step: Step, run, handle: str) -> bool:
-        """Wait for the step's container. True when it succeeded and the job is still ours."""
+        """Wait for the step's container. True when it exited with code 0 while the step was still ours."""
         job_id, run_id = job["id"], run["id"]
         run_dir = self.s.runs_dir / str(run_id)
         timeout = flow.timeout_for(step)
@@ -201,16 +270,17 @@ class Executor:
                     return False
                 if code is not None:
                     break
-                if not store.renew_job_lease(self.conn, job_id, self.owner, self.s.lease_s):
-                    current = store.get_job(self.conn, job_id)
-                    if current is not None and current["state"] == "running":
-                        # We stalled and another executor adopted this container: it is theirs now.
-                        log.warning("job %s was taken over; leaving run %s to the new owner", job_id, run_id)
-                        return False
+                lease = store.renew_step_lease(self.conn, job_id, step.name, self.owner, self.s.lease_s)
+                if lease == "taken":
+                    # We stalled and another executor adopted this container: it is theirs now.
+                    log.warning("job %s: step %s was taken over; leaving run %s to the new owner", job_id, step.name, run_id)
+                    return False
+                if lease == "stopped":
+                    # The job was cancelled, or failed in another step.
                     self.runtime.kill(handle)
                     store.finish_run(self.conn, run_id, "cancelled")
                     remove = True
-                    log.info("job %s was cancelled; stopped run %s", job_id, run_id)
+                    log.info("job %s is no longer running; stopped run %s", job_id, run_id)
                     return False
                 if self._clock() >= deadline:
                     self.runtime.kill(handle)
@@ -218,6 +288,7 @@ class Executor:
                     self._fail_run(job, flow, step, run, f"timed out after {timeout}s", None)
                     remove = True
                     return False
+                self._heartbeat(busy=True)
                 self._sleep(self.s.executor_poll_s)
 
             self._save_logs(handle, run_dir)
@@ -225,33 +296,36 @@ class Executor:
             if code != 0:
                 self._fail_run(job, flow, step, run, f"container exited with code {code}", code)
                 return False
-            store.step_succeeded(self.conn, job_id, run_id, step.name)
             log.info("job %s: step %s (run %s) succeeded", job_id, step.name, run_id)
             return True
         finally:
             if remove:
                 self.runtime.remove(handle)
 
-    def _finish(self, job, flow: Flow, done: dict) -> None:
+    def _finish(self, job, flow: Flow) -> None:
         """Every step has succeeded: queue the deliveries and store the result."""
+        done = store.succeeded_steps(self.conn, job["id"])
+        names = [n for n in flow.delivered_steps() if n in done]
         deliveries = []
-        names = flow.delivered_steps()
         for name in names:
             self._write_manifest(done[name], self.s.runs_dir / str(done[name]))
             # With several delivered steps, a directory destination keeps each in its own subfolder.
             extra = {"subfolder": name} if len(names) > 1 else {}
             deliveries += [(done[name], {**d.model_dump(), **extra}) for d in flow.destinations]
-        result_run = done[flow.result_step()]
-        result, problem = self._read_result(flow, self.s.runs_dir / str(result_run))
-        store.run_succeeded(self.conn, job["id"], self.owner, deliveries, result_run, result, problem)
-        log.info("job %s: all steps succeeded", job["id"])
+        result_run = done.get(flow.result_step())
+        result, problem = (None, None)
+        if result_run is not None:
+            result, problem = self._read_result(flow, self.s.runs_dir / str(result_run))
+        if store.finish_job(self.conn, job["id"], deliveries, result_run, result, problem):
+            log.info("job %s: all steps succeeded", job["id"])
 
     def _fail_run(self, job, flow: Flow, step: Step, run, error: str, exit_code: int | None) -> None:
         retry = store.count_runs(self.conn, job["id"], step.name) < flow.attempts_for(step)
         if len(flow.steps) > 1:
             error = f"step {step.name}: {error}"
-        store.run_failed(
-            self.conn, job["id"], run["id"], self.owner, error, exit_code, retry, self.s.backoff_s(run["attempt"])
+        store.step_failed(
+            self.conn, job["id"], step.name, run["id"], self.owner, error, exit_code, retry,
+            self.s.backoff_s(run["attempt"]),
         )
         log.warning("job %s: run %s failed (%s)%s", job["id"], run["id"], error, ", will retry" if retry else "")
 

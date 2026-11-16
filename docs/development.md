@@ -26,6 +26,7 @@ Design rules worth keeping:
 - Postgres is the only source of truth. A state change and everything that follows from it happen in one transaction in `store.py`.
 - Work is claimed with leases (`FOR UPDATE SKIP LOCKED`); there are no "in progress" states to clean up after a crash.
 - Only the gateway talks to the PACS, and it does one thing at a time.
+- Executors claim single steps (`job_steps`), by kind. A job is `running` from its first claimed step until its last step succeeds; finishing it is idempotent and guarded by a lock on the job.
 - The executor knows containers only through the `Runtime` interface.
 
 ## Running the tests

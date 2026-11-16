@@ -316,6 +316,16 @@ const VIEWS = {
     const failed = s.finished_per_hour.filter((r) => r.kind === "failed").reduce((a, r) => a + r.n, 0);
     const fetched = s.fetched_per_hour.reduce((a, r) => a + Number(r.instances || 0), 0);
     const tile = (k, v, sub, tone) => el("div", { className: "tile" }, el("div", { className: "k" }, k), el("div", { className: "v " + (tone || "") }, v), el("div", { className: "s" }, sub || ""));
+    const executorTile = (s) => {
+      const alive = Object.entries(s.status).filter(([k, v]) => k.startsWith("executor:") && v.age_s < 60).map(([, v]) => v);
+      const count = (kind) => alive.filter((e) => e.kind === kind).length;
+      const parts = [["gpu", "GPU"], ["cpu", "CPU"], ["any", "general"]].filter(([k]) => count(k)).map(([k, label]) => `${count(k)} ${label}`);
+      const canGpu = count("gpu") + count("any"), canCpu = count("cpu") + count("any"), w = s.waiting_steps;
+      // A step that nobody can take is the one thing here that needs a person.
+      const stuck = (w.gpu && !canGpu) ? `${w.gpu} gpu step${w.gpu > 1 ? "s" : ""} waiting, no GPU executor` : (w.cpu && !canCpu) ? `${w.cpu} cpu step${w.cpu > 1 ? "s" : ""} waiting, no CPU executor` : "";
+      const busy = alive.filter((e) => e.busy).length;
+      return tile("Executors", alive.length ? parts.join(" · ") : "none", stuck || (alive.length ? `${busy} busy · ${w.gpu + w.cpu} step${w.gpu + w.cpu === 1 ? "" : "s"} waiting` : "no executor is running"), stuck || !alive.length ? "bad" : "");
+    };
     const range = el("select", { id: "range", ariaLabel: "Time range" }, ...[[24, "Last 24 hours"], [48, "Last 48 hours"], [168, "Last 7 days"], [720, "Last 30 days"]].map(([h, t]) => el("option", { value: h, selected: h === view.hours }, t)));
     range.onchange = () => { view.hours = Number(range.value); render(); };
     const stale = g && g.age_s > 120;
@@ -325,6 +335,7 @@ const VIEWS = {
       tile("Oldest waiting job", s.oldest_waiting_s ? duration(s.oldest_waiting_s) : "none", "queued, retrieving or ready"),
       tile("PACS", !g ? "unknown" : g.breaker_open ? "not answering" : "reachable", !g ? "no gateway heartbeat yet" : stale ? `gateway silent for ${duration(g.age_s)}` : g.batch_window_open ? "batch window open" : "batch window closed", !g || stale ? "warn" : g.breaker_open ? "bad" : "ok"),
       tile("Instances fetched", num(fetched), "from the PACS"),
+      executorTile(s),
       tile("Disk used", g && g.disk_used_fraction !== undefined ? Math.round(g.disk_used_fraction * 100) + "%" : "unknown", `cache ${bytes(Number(s.cache.bytes))} in ${num(s.cache.series)} series`, g && g.disk_used_fraction >= 0.8 ? "warn" : ""));
     const finished = bucketize(s.finished_per_hour, s.hours, s.now, (r) => r ? [r.kind === "done" ? r.n : 0, r.kind === "failed" ? r.n : 0] : [0, 0]);
     const pulled = bucketize(s.fetched_per_hour, s.hours, s.now, (r) => r ? [Number(r.instances || 0)] : [0]);
@@ -369,6 +380,7 @@ const VIEWS = {
         if (j.study_instance_uid) lines.push(`study ${j.study_instance_uid}`);
         lines.push("");
         for (const e of j.events) lines.push(`${when(e.at)}  ${e.kind}${Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : ""}`);
+        if (j.steps && j.steps.length > 1) lines.push("", "steps: " + j.steps.map((st) => `${st.step} ${st.state}${st.gpu ? " (gpu)" : ""}`).join(" · "));
         for (const r of j.runs) { lines.push("", `run ${r.attempt}${r.step && r.step !== "main" ? " (step " + r.step + ")" : ""}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`); if (r.image_digest) lines.push(`  image ${r.image_digest}`); }
         if (can("results.view")) {
           try { const r = await api(`/jobs/${j.id}/result`); lines.push("", "result reported by the flow:", JSON.stringify(r.data, null, 2)); } catch {}

@@ -51,7 +51,7 @@ Started by Compose; you rarely run these by hand.
 |---|---|
 | `api [--host] [--port]` | HTTP API and UI |
 | `gateway` | PACS gateway |
-| `executor` | Container executor |
+| `executor` | Container executor; its kind comes from `RADFETCH_EXECUTOR_KIND` |
 | `sender` | Result delivery and notifications |
 | `scp` | Push ingress |
 | `janitor` | Cleanup |

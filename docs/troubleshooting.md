@@ -9,7 +9,7 @@ docker compose exec api radfetch status <job id>
 It lists every step with its time and detail. Service logs have more:
 
 ```bash
-docker compose logs --tail 100 gateway executor sender scp
+docker compose logs --tail 100 gateway executor-gpu executor-cpu sender scp
 ```
 
 ## Job errors
@@ -28,6 +28,7 @@ docker compose logs --tail 100 gateway executor sender scp
 | `container exited with code N` | The flow's program failed | Read the container log (below) |
 | `timed out after Ns` | The run exceeded the flow's `timeout_s` | Raise `timeout_s` or look at why the run is slow |
 | `gave up after N run attempts` / `gave up after N attempts of step …` | Every allowed run of that step failed | Fix the cause, then retry the job; it continues at that step |
+| `the flow was changed while this job was running …` | A step the job had laid out no longer exists in the flow file, or reads from different steps | `radfetch retry <job id> --full` |
 | `step NAME: …` | The error is from that step of a multi-step flow | As for the error after the step name |
 | `delivery failed: …` | A destination kept refusing the results | Fix the destination, then retry: only the delivery is repeated |
 | `delivery failed: run produced no DICOM files` | A `dicom` or `stow` destination found nothing to send | The flow's container must write DICOM files to `/output` |
@@ -61,16 +62,22 @@ to keep those of failed jobs longer.
 
 | Check | Likely cause |
 |---|---|
-| Several jobs are `ready` | Normal: batch fetching pauses while `RADFETCH_MAX_STAGED_JOBS` jobs wait for the executor. If they stay `ready`, see the next section |
+| Several jobs are `ready` | Normal: batch fetching pauses while `RADFETCH_MAX_STAGED_JOBS` jobs wait for an executor. If they stay `ready`, see the next section |
 | Disk is nearly full | Batch retrieval stops at 80% usage, everything at 95%. Free space or lower the retention settings |
 | Gateway log shows retries | A series keeps failing; it is retried with growing delays and then fails the job |
 | Slow but moving | The rate budget (`RADFETCH_RATE_INSTANCES_PER_MIN`) is doing its job |
 
-### Jobs stay `ready`
+### Jobs stay `ready`, or `running` with nothing happening
 
-The executor is not taking work. Check `docker compose ps executor` and its log.
-A long-running container also holds the executor: one executor runs one
-container at a time.
+No executor is taking the next step.
+
+| Check | Likely cause |
+|---|---|
+| The Dashboard's Executors tile is red | No executor of the kind the waiting step needs: a `gpu: true` step needs `executor-gpu`, every other step needs `executor-cpu`. Start one, or correct the flow's `gpu` setting |
+| Executors are listed and busy | They are occupied; each runs one container at a time. Add CPU executors, or wait for the GPU |
+| A job is `running` and its history shows a failed run | The step is waiting for its next attempt; the delay grows with each attempt |
+| The batch shows "(paused)" | Resume it |
+| Otherwise | `docker compose ps executor-gpu executor-cpu`, then their logs |
 
 ### Jobs stay `sending`
 

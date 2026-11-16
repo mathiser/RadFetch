@@ -43,6 +43,10 @@ class Runtime(Protocol):
         """Immutable identifier of the image the container actually runs, for traceability."""
         ...
 
+    def list_run_ids(self) -> list[str]:
+        """Run ids of every flow container that exists on this node, running or not."""
+        ...
+
     def exit_code(self, handle: str) -> int | None:
         """None while running, otherwise the exit code."""
         ...

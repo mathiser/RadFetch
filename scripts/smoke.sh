@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the Compose stack against the fake PACS.
-# Runs a two-step flow (one step a gpu step under RADFETCH_DEBUG_FAKE_GPU), so it works on hosts without a GPU.
+# Runs a two-step flow: a gpu step taken by the GPU executor (under RADFETCH_DEBUG_FAKE_GPU, so it
+# works on hosts without a GPU) and a cpu step taken by a CPU executor.
 # Usage: scripts/smoke.sh        (set SMOKE_NO_BUILD=1 to reuse an existing radfetch:local image)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +14,7 @@ fi
 compose() { docker compose --profile dev "$@"; }
 cleanup() {
   status=$?
-  if [ $status -ne 0 ]; then compose logs --tail 60 gateway executor sender api || true; fi
+  if [ $status -ne 0 ]; then compose logs --tail 60 gateway executor-gpu executor-cpu sender api || true; fi
   compose down -v >/dev/null 2>&1 || true
   rm -f .env flows/smoke.yaml
   # data/ is written by root inside the containers
@@ -66,4 +67,8 @@ results=$(docker run --rm -v "$PWD/data:/data:ro" busybox:1.36 sh -c 'cat /data/
 [ "$results" = "4 12" ] || { echo "unexpected results: $results" >&2; exit 1; }
 stored=$(api "http://localhost:8000/results?flow=smoke" | grep -o '"instances":12' | wc -l | xargs)
 [ "$stored" = "4" ] || { echo "expected 4 stored results, found $stored" >&2; exit 1; }
-echo "smoke test passed: 4 jobs done through a two-step flow with the fake GPU, results stored"
+split=$(compose logs executor-gpu executor-cpu 2>/dev/null | grep -c "step count .* succeeded\|step report .* succeeded" || true)
+gpu_did=$(compose logs executor-gpu 2>/dev/null | grep -c "step count .* succeeded" || true)
+cpu_did=$(compose logs executor-cpu 2>/dev/null | grep -c "step report .* succeeded" || true)
+[ "$gpu_did" = "4" ] && [ "$cpu_did" = "4" ] || { echo "steps ran on the wrong executors: gpu $gpu_did, cpu $cpu_did of $split" >&2; exit 1; }
+echo "smoke test passed: 4 jobs, gpu steps on the GPU executor (fake GPU), cpu steps on the CPU executors, results stored"

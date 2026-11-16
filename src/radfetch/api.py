@@ -312,6 +312,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 gauges["radfetch_disk_used_fraction"] = gateway["disk_used_fraction"]
         for name, value in gauges.items():
             lines += [f"# TYPE {name} gauge", f"{name} {value}"]
+        alive = [v for k, v in m["status"].items() if k.startswith("executor:") and v["age_s"] < 60]
+        lines.append("# TYPE radfetch_executors gauge")
+        for kind in ("gpu", "cpu", "any"):
+            lines.append(f'radfetch_executors{{kind="{kind}"}} {sum(1 for v in alive if v.get("kind") == kind)}')
+        waiting = m["waiting_steps"]
+        lines.append("# TYPE radfetch_waiting_steps gauge")
+        lines += [f'radfetch_waiting_steps{{needs="{k}"}} {waiting[k]}' for k in ("gpu", "cpu")]
         return "\n".join(lines) + "\n"
 
     @app.get("/audit")
@@ -357,6 +364,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             events = [{"at": e["at"], "kind": e["kind"], "detail": {}} for e in events]
         row["events"] = events
         row["runs"] = store.job_runs(conn, job_id)
+        row["steps"] = [{k: s[k] for k in ("step", "state", "gpu", "needs")} for s in store.job_steps(conn, job_id)]
         return row
 
     @app.post("/jobs/{job_id}/cancel")

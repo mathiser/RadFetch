@@ -68,11 +68,13 @@ delays if the webhook is down.
 | `radfetch_cache_bytes`, `radfetch_disk_used_fraction` | For capacity planning; retrieval of batches stops at 80% disk use |
 | `radfetch_gateway_batch_window_open` | Informational |
 | `radfetch_incoming_studies` | Stays above 0: pushed studies are not being processed |
+| `radfetch_executors{kind=…}` | 0 for a kind your flows need |
+| `radfetch_waiting_steps{needs=…}` | Keeps growing: not enough executors of that kind |
 
 Logs:
 
 ```bash
-docker compose logs -f --tail 100 gateway executor sender
+docker compose logs -f --tail 100 gateway executor-gpu executor-cpu sender
 ```
 
 ## Backup and restore
@@ -126,14 +128,25 @@ docker compose up -d --build
 
 Schema changes are applied automatically at start by the `init-db` service. A
 flow container that is running during the upgrade keeps running; the new
-executor picks it up and waits for it.
+executor picks it up and waits for it. (The upgrade that introduced separate GPU
+and CPU executors is the exception: steps running at that moment are started again.)
 
 Take a database backup before upgrading.
 
-## GPUs
+## Executors and GPUs
 
-- A flow with `gpu: true` gets the host's GPUs through the NVIDIA Container Toolkit.
-- One executor runs one container at a time. With several GPUs, run one executor per GPU, each pinned with `RADFETCH_GPU_DEVICE_IDS`:
+Executors run the flows' containers. Each executor process runs **one step at a
+time**, and its kind decides which steps it takes:
+
+| `RADFETCH_EXECUTOR_KIND` | Takes | Compose service |
+|---|---|---|
+| `gpu` | Steps marked `gpu: true` | `executor-gpu` |
+| `cpu` | Every other step | `executor-cpu` (2 replicas by default) |
+| `any` | Both | none by default; for a set-up with a single executor |
+
+How to size them:
+
+- **One GPU executor per GPU.** With several GPUs, add a service per GPU, each pinned with `RADFETCH_GPU_DEVICE_IDS`:
 
 ```yaml
   executor-gpu1:
@@ -141,6 +154,7 @@ Take a database backup before upgrading.
     command: executor
     environment:
       <<: *env
+      RADFETCH_EXECUTOR_KIND: gpu
       RADFETCH_GPU_DEVICE_IDS: "1"
     volumes:
       - ./data:/data
@@ -148,9 +162,20 @@ Take a database backup before upgrading.
       - /var/run/docker.sock:/var/run/docker.sock
 ```
 
-  and set `RADFETCH_GPU_DEVICE_IDS: "0"` on the original `executor` the same way.
-- Flows with `gpu: false` are run by the same executors, one at a time each.
-- `RADFETCH_DEBUG_FAKE_GPU=true` is for development machines without a GPU. Never set it in production: model images would run on CPU or fail.
+  and set `RADFETCH_GPU_DEVICE_IDS: "0"` on `executor-gpu` the same way.
+- **CPU executors by what the host can carry.** Each replica runs one container at a time. Raise `deploy.replicas` of `executor-cpu`, or scale at run time:
+
+```bash
+docker compose up -d --scale executor-cpu=4
+```
+
+  Set `mem_limit` on CPU steps so several of them cannot exhaust the host together.
+- **Every kind of step needs an executor.** If a flow has a `gpu: true` step and no GPU executor is running (or the reverse), that step waits. The Dashboard's **Executors** tile turns red and says so, and `radfetch_waiting_steps` in the metrics shows the queue.
+- **A host without a GPU** needs only CPU executors, as long as no flow marks a step `gpu`. `RADFETCH_DEBUG_FAKE_GPU=true` is for development machines: never set it in production, where model images would run on CPU or fail.
+
+What the split buys: the GPU is released as soon as a job's GPU step is done, so
+the next job's inference starts while the first job's CPU steps (measurement,
+reporting) run on the CPU executors.
 
 ## Running redundant services
 
@@ -162,7 +187,7 @@ See [High availability](high-availability.md).
 |---|---|
 | Stop one batch | **Pause** on the Batches page. Nothing new starts; a running container finishes |
 | Stop all PACS traffic now | `docker compose stop gateway`. Jobs wait and continue when it is started again |
-| Stop all inference | `docker compose stop executor`. A running flow container keeps running until it finishes and is picked up at restart |
+| Stop all inference | `docker compose stop executor-gpu executor-cpu`. A running flow container keeps running until it finishes and is picked up at restart |
 | Stop everything | `docker compose stop` |
 
 ## Security notes

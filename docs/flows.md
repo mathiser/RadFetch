@@ -96,7 +96,7 @@ Flow images often run as a non-root user, so `/output` is world-writable.
 |---|---|---|
 | `image` | The image to run. Pin it by digest (`name@sha256:…`) in production | required |
 | `command` | Overrides the image's default command | image default |
-| `gpu` | Give the container the host's GPUs | `false` |
+| `gpu` | Give the container the host's GPUs. Also decides which executors may run it: GPU executors if true, CPU executors if false | `false` |
 | `timeout_s` | Kill the container after this long | 3600 |
 | `max_attempts` | Runs before the job fails | 2 |
 | `mem_limit`, `shm_size` | Docker memory and shared-memory limits, e.g. `16g`, `2g` | none |
@@ -165,8 +165,8 @@ How it works:
 
 - **Wiring.** `inputs` maps a source to a path inside the container. The source is `series` for the DICOM series, or the name of another step for that step's whole `/output` folder. Everything is mounted read-only; each step writes to its own `/output`.
 - **Order.** A step runs after every step it reads from. The order in the file does not matter, and a circular dependency is rejected when the flow is loaded.
-- **One at a time.** Steps of a job run one after another on the executor that took the job. Independent steps are not run in parallel, since one executor means one GPU.
-- **Failures.** If a step fails, only that step is retried (up to its `max_attempts`); the outputs of the steps before it are kept. Retrying a failed job by hand also continues at the failed step. `radfetch retry <job> --full` runs every step again.
+- **Who runs what.** Executors take single steps, not whole jobs. A step marked `gpu: true` is taken by a GPU executor, every other step by a CPU executor. So the GPU is free for the next job while a job's CPU steps run, and steps that do not depend on each other run at the same time when executors are free. Two GPU steps never share one GPU.
+- **Failures.** If a step fails, only that step is retried (up to its `max_attempts`); the outputs of the steps before it are kept. If a step fails for good, the job fails and any of its other steps that are still running are stopped. Retrying a failed job by hand also continues at the failed step. `radfetch retry <job> --full` runs every step again.
 - **Delivery and results.** By default the last step's output is delivered and its `results.json` is stored. `deliver` and `results_from` change that. With several delivered steps, a `directory` destination gets one subfolder per step.
 - **Per step** you can set `image`, `command`, `gpu`, `env`, `timeout_s`, `max_attempts`, `mem_limit` and `shm_size`. The flow's `timeout_s`, `max_attempts` and `env` are the defaults.
 - **Traceability.** Each step is a run of its own in the job's history, with its image digest and log, and `radfetch.json` lists every step.

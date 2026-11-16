@@ -85,7 +85,7 @@ while it runs or afterwards:
 ## 4. See the PACS protection at work
 
 Queue a second batch with `ACC0006` to `ACC0015`. While it runs, look at the
-**Active jobs** tile on the Dashboard: the number of `ready` jobs never goes above 4. The gateway
+**Active jobs** tile on the Dashboard: the number of `ready` jobs stays small (the limit is 4 waiting for an executor). The gateway
 only fetches a few studies ahead of the executor instead of pulling all ten at
 once. That limit is `RADFETCH_MAX_STAGED_JOBS`.
 
