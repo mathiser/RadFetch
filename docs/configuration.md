@@ -47,7 +47,7 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 | `RADFETCH_MIN_INTERVAL_S` | `0.5` | Pause between any two PACS operations |
 | `RADFETCH_BATCH_WINDOWS` | empty (always) | When batch work may touch the PACS, e.g. `mon-fri 18:00-06:00; sat-sun 00:00-24:00` |
 | `RADFETCH_MAX_RESOLVED_AHEAD` | `10` | Batch jobs are looked up in the PACS only while fewer than this many wait for data |
-| `RADFETCH_MAX_STAGED_JOBS` | `4` | Batch series are fetched only while fewer than this many jobs wait for the executor |
+| `RADFETCH_MAX_STAGED_JOBS` | `4` | Batch series are fetched only while fewer than this many jobs have their data here and wait for an executor, whether not yet started or between steps |
 | `RADFETCH_DISK_HIGH_WATERMARK` | `0.80` | Batch retrieval stops above this disk usage; the janitor also starts evicting |
 | `RADFETCH_DISK_HARD_LIMIT` | `0.95` | All retrieval stops above this disk usage |
 | `RADFETCH_BREAKER_FAILURE_THRESHOLD` | `3` | Consecutive PACS failures before all PACS traffic pauses |

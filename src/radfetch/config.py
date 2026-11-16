@@ -59,7 +59,8 @@ class Settings(BaseSettings):
     batch_windows: str = ""
     # Batch jobs are resolved (C-FIND) only while fewer than this many are waiting for data.
     max_resolved_ahead: int = 10
-    # Batch series are retrieved only while fewer than this many jobs are staged, waiting for the executor.
+    # Batch series are retrieved only while fewer than this many jobs have their data here and
+    # are waiting for an executor (not started, or between steps with nobody free to take the next).
     max_staged_jobs: int = 4
     # Batch retrieval stops above this disk usage fraction; all retrieval stops above the hard limit.
     disk_high_watermark: float = 0.80

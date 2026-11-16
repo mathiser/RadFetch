@@ -113,7 +113,7 @@ Notes on the stack:
 ## What has been tested
 
 - Leader election and standby takeover for the gateway and the ingress processor, in the automated tests.
-- The stack file on a **single-node** swarm: all services started, jobs ran, and after killing the active gateway container the standby took over within about a second and the next job completed.
+- The stack file on a **single-node** swarm: all services started and a batch through a two-step flow completed, with the GPU step run by the GPU executor (using the fake-GPU flag) and the CPU steps shared between the two CPU executors. In an earlier run, killing the active gateway container made the standby take over within about a second.
 
 Not tested: a swarm with several nodes, a shared network filesystem, node loss,
 Swarm's routing mesh for the published ports, and a replicated Postgres. Treat

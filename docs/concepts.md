@@ -72,7 +72,7 @@ All of this is enforced by the gateway.
 | Hard disk limit | No retrieval above 95% disk usage | yes |
 | Rate budget | Caps average instances per minute | no |
 | Batch window | Batch work only inside configured hours | no |
-| Bounded preloading | Batch studies are fetched only a few ahead of the executor | no |
+| Bounded preloading | Batch studies are fetched only a few ahead of the executors. Jobs queueing for the GPU after a CPU step count too | no |
 | Disk watermark | Batch retrieval stops at 80% disk usage | no |
 
 One-off jobs skip the last four so that an urgent request is not held up by a

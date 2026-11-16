@@ -230,6 +230,26 @@ def state_counts(conn: Conn, flows: list[str] | None = None) -> dict[str, int]:
     return {row["state"]: row["n"] for row in rows}
 
 
+def staged_backlog(conn: Conn) -> int:
+    """Jobs whose data is here and that are waiting for an executor: nothing started yet, or
+    their next step could run but no executor has taken it.
+
+    This is what batch retrieval is held against. Counting only jobs that have not started
+    would miss jobs queueing for the GPU after a first CPU step, and the cache would fill
+    with studies the GPU cannot get to.
+    """
+    return conn.execute(
+        """
+        select count(*) as n from jobs j where j.state in ('ready', 'running') and (
+            not exists (select 1 from job_steps s where s.job_id = j.id)
+            or (not exists (select 1 from job_steps s where s.job_id = j.id and s.state = 'running')
+                and exists (select 1 from job_steps s where s.job_id = j.id and s.state = 'pending'
+                            and not exists (select 1 from job_steps d where d.job_id = s.job_id
+                                            and d.step = any(s.needs) and d.state <> 'succeeded'))))
+        """
+    ).fetchone()["n"]
+
+
 def waiting_steps(conn: Conn) -> dict[str, int]:
     """Steps that could run right now if an executor of the right kind were free."""
     rows = conn.execute(

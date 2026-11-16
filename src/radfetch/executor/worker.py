@@ -67,19 +67,26 @@ class Executor:
         if claim is None:
             return False
         self._heartbeat(busy=True, force=True)
+        try:
+            self._work(claim)
+        finally:
+            self._heartbeat(busy=False, force=True)
+        return True
+
+    def _work(self, claim) -> None:
         job = store.get_job(self.conn, claim["job_id"])
         try:
             flow = load_flow(self.s.flows_dir, job["flow"])
         except FlowError as exc:
             store.fail_job(self.conn, job["id"], str(exc))
-            return True
+            return
         step = flow.step(claim["step"])
         if step is None or {s for s in step.inputs if s != SERIES} != set(claim["needs"]):
             store.fail_job(
                 self.conn, job["id"],
                 "the flow was changed while this job was running; retry it with a full rerun",
             )
-            return True
+            return
 
         run = handle = None
         if claim["prev_state"] == "running":
@@ -88,12 +95,11 @@ class Executor:
         if handle is None:
             started = self._start(job, flow, step)
             if started is None:
-                return True
+                return
             run, handle = started
         if self._supervise(job, flow, step, run, handle):
             if store.step_succeeded(self.conn, job["id"], step.name, run["id"], self.owner):
                 self._finish(job, flow)
-        return True
 
     def _heartbeat(self, busy: bool, force: bool = False) -> None:
         """Tell the status board this executor exists, so a missing kind of executor can be noticed."""

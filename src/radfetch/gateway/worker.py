@@ -180,7 +180,7 @@ class Gateway:
             self.windows.is_open(self._now())
             and self.bucket.ready()
             and disk < s.disk_high_watermark
-            and store.count_jobs(self.conn, "ready") < s.max_staged_jobs
+            and store.staged_backlog(self.conn) < s.max_staged_jobs
         )
         r = store.claim_retrieval(self.conn, self.owner, s.retrieve_lease_s, s.interactive_priority, batch_ok)
         if r is None:

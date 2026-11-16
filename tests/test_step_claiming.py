@@ -229,3 +229,31 @@ def test_flow_changed_under_a_running_job_fails_it_clearly(conn, settings, pacs,
     ex.step()
     row = store.get_job(conn, job)
     assert row["state"] == "failed" and "flow was changed" in row["error"]
+
+
+def test_batch_preloading_counts_jobs_queueing_for_the_gpu(conn, settings, pacs, flows):
+    """A CPU step first, then a GPU step: jobs pile up before the GPU, and fetching must hold back."""
+    (settings.flows_dir / "prep.yaml").write_text(
+        "name: prep\nselect:\n  - modality: CT\n    min_instances: 5\nsteps:\n"
+        "  - {name: prepare, image: a}\n  - {name: infer, image: b, gpu: true, inputs: {prepare: /prep}}\n")
+    settings.max_staged_jobs = 2
+    store.create_batch(conn, "b", "prep", [f"ACC{i:04d}" for i in range(1, 11)], BATCH_PRIORITY)
+    gateway = Gateway(conn, pacs, settings, disk_fraction=lambda: 0.1, sleep=lambda s: None)
+    cpu = make(conn, settings, FakeRuntime(behave), "cpu")
+
+    def settle():
+        for _ in range(40):
+            if not (run_all(cpu) + sum(1 for _ in iter(gateway.step, False))):
+                return
+
+    settle()
+    # Only CPU executors are running, so every fetched job stops before its GPU step.
+    # The gateway stops at two such jobs instead of fetching all ten.
+    assert len(pacs.retrieved) == 2 and store.staged_backlog(conn) == 2
+    assert store.waiting_steps(conn) == {"gpu": 2, "cpu": 0}
+
+    gpu = make(conn, settings, FakeRuntime(behave), "gpu")
+    for _ in range(40):
+        run_all(gpu)
+        settle()
+    assert store.state_counts(conn) == {"done": 10} and len(pacs.retrieved) == 10
