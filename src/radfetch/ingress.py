@@ -14,7 +14,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool

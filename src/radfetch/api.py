@@ -19,7 +19,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from importlib import resources
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse

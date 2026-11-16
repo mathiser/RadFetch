@@ -105,7 +105,42 @@ After 30 quiet seconds (`RADFETCH_SCP_STABLE_S`) a job with source `push` appear
 and runs. Send another with `--calling-aet MR_ROOM1`: nothing starts, because no
 flow's trigger matches that sender.
 
-## 6. Create accounts
+## 6. Chain two containers
+
+A flow can run several containers, each reading what earlier ones produced. Save
+this as `flows/two-step.yaml`:
+
+```yaml
+name: two-step
+select:
+  - modality: CT
+    series_description: "(?i)thorax"
+steps:
+  - name: count
+    image: busybox:1.36
+    command: ["sh", "-c", "find /input -type f | wc -l > /output/count.txt"]
+  - name: report
+    image: busybox:1.36
+    inputs: {count: /counted}
+    command: ["sh", "-c", "echo \"{\\\"instances\\\": $(cat /counted/count.txt)}\" > /output/results.json"]
+```
+
+The second step does not read the DICOM at all: it gets the first step's output
+folder mounted at `/counted`. Flow files are read when they are used, so no
+restart is needed. Check the file, then submit a job for it on the **Submit** page:
+
+```bash
+docker compose run --rm api check-flows
+```
+
+Click the job on the **Jobs** page: its history shows the two steps and a run for
+each, and the **Results** page has a row for the flow `two-step`.
+
+The Dashboard's **Executors** tile shows who runs the steps: one GPU executor,
+which takes steps marked `gpu: true`, and two CPU executors, which take the rest.
+Both steps here are CPU steps, so the CPU executors run them.
+
+## 7. Create accounts
 
 Until an account exists, anyone who can reach the interface can use it. Create
 an administrator:
@@ -122,7 +157,7 @@ The **Users** page now lets you add people. Try it:
 
 [Users and permissions](users.md) explains the roles and what can be adjusted.
 
-## 7. Clean up
+## 8. Clean up
 
 ```bash
 docker compose --profile dev down -v

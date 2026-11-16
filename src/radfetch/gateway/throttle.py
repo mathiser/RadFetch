@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dtime
-from typing import Callable
+from datetime import datetime
+from collections.abc import Callable
 
 Clock = Callable[[], float]
 

@@ -15,7 +15,7 @@ from radfetch.gateway.worker import Gateway
 from radfetch.ingress import IngressProcessor, IngressServer
 from radfetch.janitor import Janitor
 
-from conftest import FakeRuntime, MemoryPacs
+from conftest import MemoryPacs
 
 TRIGGERED = """
 name: pushed

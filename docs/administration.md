@@ -131,7 +131,8 @@ flow container that is running during the upgrade keeps running; the new
 executor picks it up and waits for it. (The upgrade that introduced separate GPU
 and CPU executors is the exception: steps running at that moment are started again.)
 
-Take a database backup before upgrading.
+Take a database backup before upgrading, and read the [Upgrade notes](upgrading.md)
+for changes that need something from you.
 
 ## Executors and GPUs
 

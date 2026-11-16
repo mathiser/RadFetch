@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterable
+from typing import BinaryIO
+from collections.abc import Callable, Iterable
 
 import httpx
 from pydicom import dcmread
@@ -175,7 +176,11 @@ class DicomWebClient:
                     raise PacsError(f"WADO-RS returned HTTP {r.status_code}")
                 content_type = r.headers.get("content-type", "")
                 boundary = next(
-                    (p.split("=", 1)[1].strip().strip('"') for p in content_type.split(";") if p.strip().lower().startswith("boundary=")),
+                    (
+                        p.split("=", 1)[1].strip().strip('"')
+                        for p in content_type.split(";")
+                        if p.strip().lower().startswith("boundary=")
+                    ),
                     None,
                 )
                 if not boundary:

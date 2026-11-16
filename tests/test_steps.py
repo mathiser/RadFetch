@@ -184,7 +184,8 @@ def test_cancel_during_a_step_stops_the_pipeline(conn, settings, pipe):
 def test_single_image_flows_are_one_step_named_main(settings):
     flow = load_flow(settings.flows_dir, "seg")
     (step,) = flow.steps
-    assert (step.name, step.image, step.gpu, step.inputs) == ("main", "registry.example/seg@sha256:abc", True, {"series": "/input"})
+    assert (step.name, step.image, step.gpu) == ("main", "registry.example/seg@sha256:abc", True)
+    assert step.inputs == {"series": "/input"}
     assert flow.delivered_steps() == ["main"] and flow.result_step() == "main"
 
 

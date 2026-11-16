@@ -326,6 +326,15 @@ const VIEWS = {
       const busy = alive.filter((e) => e.busy).length;
       return tile("Executors", alive.length ? parts.join(" · ") : "none", stuck || (alive.length ? `${busy} busy · ${w.gpu + w.cpu} step${w.gpu + w.cpu === 1 ? "" : "s"} waiting` : "no executor is running"), stuck || !alive.length ? "bad" : "");
     };
+    // Only worth showing when some flow has more than one step.
+    const stepsTable = (s) => {
+      const multi = new Set(s.steps.filter((r) => r.step !== "main").map((r) => r.flow));
+      const rows = s.steps.filter((r) => multi.has(r.flow));
+      if (!rows.length) return "";
+      return el("section", {}, el("h2", {}, "By step"), el("div", { className: "scroll" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Flow"), el("th", {}, "Step"), ...["Succeeded runs", "Failed runs", "Median run time"].map((t) => el("th", { className: "num" }, t)))),
+        el("tbody", { id: "steps" }, ...rows.map((r) => el("tr", {}, el("td", {}, r.flow), el("td", {}, r.step), el("td", { className: "num" }, num(r.succeeded)), el("td", { className: "num" }, num(r.failed)), el("td", { className: "num" }, duration(r.median_s))))))));
+    };
     const range = el("select", { id: "range", ariaLabel: "Time range" }, ...[[24, "Last 24 hours"], [48, "Last 48 hours"], [168, "Last 7 days"], [720, "Last 30 days"]].map(([h, t]) => el("option", { value: h, selected: h === view.hours }, t)));
     range.onchange = () => { view.hours = Number(range.value); render(); };
     const stale = g && g.age_s > 120;
@@ -341,7 +350,7 @@ const VIEWS = {
     const pulled = bucketize(s.fetched_per_hour, s.hours, s.now, (r) => r ? [Number(r.instances || 0)] : [0]);
     const per = s.hours > 48 ? "per day" : "per hour";
     const flows = el("section", {}, el("h2", {}, "By flow"), el("div", { className: "scroll" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Flow"), ...["Active", "Done", "Failed", "Success rate", "Median time per job", "Median run time"].map((t) => el("th", { className: "num" }, t)))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Flow"), ...["Active", "Done", "Failed", "Success rate", "Median time per job", "Median container time per job"].map((t) => el("th", { className: "num" }, t)))),
       el("tbody", {}, ...(s.flows.length ? s.flows.map((f) => el("tr", {}, el("td", {}, f.flow), el("td", { className: "num" }, num(f.active)), el("td", { className: "num" }, num(f.done)), el("td", { className: "num" }, num(f.failed)),
         el("td", { className: "num" }, f.done + f.failed ? Math.round((100 * f.done) / (f.done + f.failed)) + "%" : ""), el("td", { className: "num" }, duration(f.median_job_s)), el("td", { className: "num" }, duration(f.median_run_s))))
         : [el("tr", {}, el("td", { colSpan: 7, className: "muted" }, "No jobs in this period."))])))));
@@ -349,7 +358,7 @@ const VIEWS = {
       el("div", { className: "grid2" },
         el("section", {}, el("h2", {}, "Jobs finished " + per), ...columnChart(finished, [{ name: "Done", color: css("--done") }, { name: "Failed", color: css("--failed") }], per)),
         el("section", {}, el("h2", {}, "Instances fetched from the PACS " + per), ...columnChart(pulled, [{ name: "Instances", color: css("--fetched") }], per))),
-      flows];
+      flows, stepsTable(s)];
   },
 
   async jobs() {

@@ -146,7 +146,8 @@ def test_earlier_step_output_is_mounted_read_only(docker_runtime, settings):
     upstream = settings.runs_dir / "upstream" / "out"
     upstream.mkdir(parents=True)
     (upstream / "mask.nii").write_text("mask")
-    spec = spec_for(settings, ["sh", "-c", "cat /masks/mask.nii /dicom/series/a.dcm; touch /masks/x 2>/dev/null && exit 9; exit 0"])
+    script = "cat /masks/mask.nii /dicom/series/a.dcm; touch /masks/x 2>/dev/null && exit 9; exit 0"
+    spec = spec_for(settings, ["sh", "-c", script])
     spec.input_path = "/dicom"
     spec.extra_inputs = {"/masks": upstream}
     handle = docker_runtime.start(spec)

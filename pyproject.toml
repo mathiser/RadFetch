@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 radfetch = "radfetch.cli:app"
@@ -32,3 +32,11 @@ packages = ["src/radfetch"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM"]
+# B008: FastAPI's Depends(...) and Typer's Option(...) are meant to be called in argument defaults.
+ignore = ["B008", "SIM102", "SIM105"]

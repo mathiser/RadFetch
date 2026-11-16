@@ -9,7 +9,8 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -289,10 +290,25 @@ def stats_overview(conn: Conn, hours: int, flows: list[str] | None = None) -> di
                count(*) filter (where j.state not in ('done','failed','cancelled')) as active,
                percentile_cont(0.5) within group (order by extract(epoch from j.updated_at - j.created_at))
                    filter (where j.state = 'done') as median_job_s,
-               (select percentile_cont(0.5) within group (order by extract(epoch from r.finished_at - r.started_at))
-                  from runs r join jobs j2 on j2.id = r.job_id
-                 where j2.flow = j.flow and r.state = 'succeeded' and r.finished_at > {window}) as median_run_s
+               (select percentile_cont(0.5) within group (order by t.seconds) from (
+                    select sum(extract(epoch from r.finished_at - r.started_at)) as seconds
+                    from runs r join jobs j2 on j2.id = r.job_id
+                    where j2.flow = j.flow and j2.state = 'done' and r.state = 'succeeded'
+                      and j2.updated_at > {window}
+                    group by r.job_id) t) as median_run_s
         from jobs j where j.updated_at > {window} and {scope} group by j.flow order by j.flow
+        """,
+        p,
+    ).fetchall()
+    per_step = conn.execute(
+        f"""
+        select j.flow, r.step,
+               count(*) filter (where r.state = 'succeeded') as succeeded,
+               count(*) filter (where r.state = 'failed') as failed,
+               percentile_cont(0.5) within group (order by extract(epoch from r.finished_at - r.started_at))
+                   filter (where r.state = 'succeeded') as median_s
+        from runs r join jobs j on j.id = r.job_id
+        where r.finished_at > {window} and {scope} group by j.flow, r.step order by j.flow, r.step
         """,
         p,
     ).fetchall()
@@ -311,6 +327,7 @@ def stats_overview(conn: Conn, hours: int, flows: list[str] | None = None) -> di
         "finished_per_hour": finished,
         "fetched_per_hour": fetched,
         "flows": per_flow,
+        "steps": per_step,
         "oldest_waiting_s": waiting["oldest_s"],
         "cache": cache,
         "status": get_status(conn),

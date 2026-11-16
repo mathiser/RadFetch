@@ -7,7 +7,6 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -128,7 +127,7 @@ def fake_pacs(
     port: int = 11112,
     studies: int = 5,
     ae_title: str = "PACS",
-    move_dest: Optional[str] = typer.Option(None, help="AET=host:port of a C-MOVE destination"),
+    move_dest: str | None = typer.Option(None, help="AET=host:port of a C-MOVE destination"),
 ):
     """Run an in-memory Q/R SCP with synthetic studies ACC0001.. for development."""
     from radfetch.devtools.fakepacs import FakePacsServer, default_studies
@@ -195,7 +194,7 @@ def batch(name: str, flow: str, file: Path = typer.Argument(..., help="one acces
 
 
 @app.command()
-def status(job_id: Optional[uuid.UUID] = typer.Argument(None)):
+def status(job_id: uuid.UUID | None = typer.Argument(None)):
     """Show one job with its history, or the job counts per state."""
     _, conn = _setup()
     if job_id is None:
@@ -286,7 +285,7 @@ def user_create(
     role: str = typer.Option("viewer", help="monitor, viewer, submitter, operator or admin"),
     password_stdin: bool = typer.Option(False, help="read the password from standard input instead of generating one"),
     service_account: bool = typer.Option(False, help="no password; the account is used with API tokens only"),
-    flows: Optional[str] = typer.Option(None, help="comma-separated flows the user is limited to (default: all)"),
+    flows: str | None = typer.Option(None, help="comma-separated flows the user is limited to (default: all)"),
 ):
     """Create a user. A generated password is printed once. The first user should be an admin."""
     import sys
@@ -319,11 +318,11 @@ def user_list():
 @user_app.command("set")
 def user_set(
     username: str,
-    role: Optional[str] = typer.Option(None),
+    role: str | None = typer.Option(None),
     grant: list[str] = typer.Option([], help="permission to add on top of the role (repeatable)"),
     deny: list[str] = typer.Option([], help="permission to remove from the role (repeatable)"),
     clear_adjustments: bool = typer.Option(False, help="remove all individual grants and denies"),
-    flows: Optional[str] = typer.Option(None, help="comma-separated flows to limit the user to"),
+    flows: str | None = typer.Option(None, help="comma-separated flows to limit the user to"),
     all_flows: bool = typer.Option(False, help="lift the flow restriction"),
     disable: bool = typer.Option(False),
     enable: bool = typer.Option(False),
@@ -400,7 +399,7 @@ def user_roles():
 
 
 @token_app.command("create")
-def token_create(username: str, name: Optional[str] = typer.Option(None, help="a label for the token")):
+def token_create(username: str, name: str | None = typer.Option(None, help="a label for the token")):
     """Create an API token for a user and print it once. It has that user's rights."""
     try:
         typer.echo(store.create_token(_admin_conn(), username, name, by="cli"))

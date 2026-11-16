@@ -1,0 +1,53 @@
+# Upgrade notes
+
+How to upgrade is in [Administration](administration.md#upgrading): pull, then
+`docker compose up -d --build`. Database changes are applied automatically. This
+page lists the changes that need something from you, newest first.
+
+## Executors take single steps; GPU and CPU executors
+
+- **Service names changed.** The Compose service `executor` is replaced by `executor-gpu` and `executor-cpu`. Update scripts, monitoring and any `docker-compose.override.yml` that name the old service. After upgrading, remove the old container:
+
+    ```bash
+    docker compose up -d --build --remove-orphans
+    ```
+
+- **Check that every kind of step has an executor.** Steps marked `gpu: true` are taken only by `executor-gpu`, all others only by `executor-cpu`. The Dashboard's Executors tile turns red if a step is waiting for a kind that is not running.
+- **Steps running during the upgrade are started again.** Let running work finish first if a rerun is costly:
+
+    ```bash
+    docker compose stop gateway
+    ```
+
+    wait until the Dashboard shows no running jobs, then upgrade.
+- **Job states read differently.** A job is `running` from its first step to its last, including while a step waits to be retried. It no longer returns to `ready` between attempts.
+- **`RADFETCH_MAX_STAGED_JOBS` counts more.** It now covers every job waiting for an executor, also between steps. If batches fetch more slowly than before, the executors are the bottleneck; raise the setting only if you have disk to spare.
+
+## Flows with several steps
+
+- Existing flows work unchanged; a flow with a single `image` is one step named `main`.
+- With more than one delivered step, a `directory` destination gets a subfolder per step.
+
+## Structured results
+
+- Nothing to do. Flows that write `/output/results.json` now have it stored; add the `results.view` permission to accounts below the `viewer` role that should see it.
+
+## User accounts replace named tokens
+
+- **Existing tokens keep working.** Each became a service account with the same name and role.
+- **`radfetch token create` changed.** It now takes a username: create the account first with `radfetch user create`, then a token for it.
+- **Create an administrator.** Until an account with a password exists, nobody can sign in to the web interface (API tokens still work):
+
+    ```bash
+    docker compose exec api radfetch user create <name> --role admin
+    ```
+
+- **Set `RADFETCH_PUBLIC_URL`** to the `https://` address of the interface, so that session cookies are marked secure.
+
+## Standby replicas
+
+- Nothing to do for a single-host setup. The gateway and push ingress now hold a database lock while active; a second copy started by mistake stands by instead of doubling the load on the PACS.
+
+## Earlier
+
+- **Renamed from the working name.** Environment variables are prefixed `RADFETCH_`, the command is `radfetch`, and container labels are `radfetch.*`.

@@ -14,7 +14,7 @@ import socket
 import time
 import uuid
 from datetime import datetime
-from typing import Callable
+from collections.abc import Callable
 
 from radfetch import store
 from radfetch.config import Settings

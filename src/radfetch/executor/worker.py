@@ -15,7 +15,7 @@ import shutil
 import socket
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from radfetch import store
 from radfetch.config import Settings

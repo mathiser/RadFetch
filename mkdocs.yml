@@ -46,6 +46,7 @@ nav:
       - Users and permissions: users.md
       - High availability: high-availability.md
       - Troubleshooting: troubleshooting.md
+      - Upgrade notes: upgrading.md
   - Reference:
       - API: api.md
       - Command line: cli.md

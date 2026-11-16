@@ -257,3 +257,17 @@ def test_batch_preloading_counts_jobs_queueing_for_the_gpu(conn, settings, pacs,
         run_all(gpu)
         settle()
     assert store.state_counts(conn) == {"done": 10} and len(pacs.retrieved) == 10
+
+
+def test_dashboard_figures_per_flow_and_per_step(conn, settings, pacs, flows):
+    ready_job(conn, settings, pacs, "pipe")
+    run_all(make(conn, settings, FakeRuntime(lambda spec: 1 if spec.step == "report" else behave(spec))))
+    # make the durations known: segment 60 s, measure 30 s
+    conn.execute("update runs set started_at = finished_at - interval '60 seconds' where step = 'segment'")
+    conn.execute("update runs set started_at = finished_at - interval '30 seconds' where step = 'measure'")
+    stats = store.stats_overview(conn, 24)
+    steps = {(r["flow"], r["step"]): r for r in stats["steps"]}
+    assert steps[("pipe", "segment")]["median_s"] == 60 and steps[("pipe", "measure")]["median_s"] == 30
+    assert (steps[("pipe", "report")]["succeeded"], steps[("pipe", "report")]["failed"]) == (0, 2)
+    (flow,) = stats["flows"]
+    assert flow["failed"] == 1 and flow["median_run_s"] is None  # no job of this flow has finished

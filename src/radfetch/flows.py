@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -86,7 +86,7 @@ class Trigger(BaseModel):
         return not self.calling_ae_title or bool(re.search(self.calling_ae_title, calling_ae_title or ""))
 
 
-Destination = Annotated[Union[DicomDestination, DirectoryDestination, StowDestination], Field(discriminator="type")]
+Destination = Annotated[DicomDestination | DirectoryDestination | StowDestination, Field(discriminator="type")]
 
 
 SERIES = "series"  # the input name for the DICOM series fetched or received for the job
@@ -144,7 +144,7 @@ class Flow(BaseModel):
     trigger: Trigger | None = None
 
     @model_validator(mode="after")
-    def _check_steps(self) -> "Flow":
+    def _check_steps(self) -> Flow:
         if self.steps and self.image:
             raise ValueError("give either image (one container) or steps (several), not both")
         if not self.steps:

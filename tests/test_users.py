@@ -25,7 +25,7 @@ def client(conn, settings):
 def test_roles_build_on_each_other():
     order = list(auth.ROLES)
     assert order == ["monitor", "viewer", "submitter", "operator", "admin"]
-    for lower, higher in zip(order, order[1:]):
+    for lower, higher in zip(order, order[1:], strict=False):
         assert auth.ROLES[lower] < auth.ROLES[higher]
     assert set().union(*auth.ROLES.values()) == set(auth.PERMISSIONS)  # every permission is reachable
     assert auth.effective_permissions("viewer", ["jobs.submit"], ["identifiers.view"]) == {

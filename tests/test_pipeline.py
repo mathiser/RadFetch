@@ -326,7 +326,7 @@ def test_cancel_batch(conn, settings, pacs):
 
 def test_eviction_respects_active_jobs_and_refetches(conn, settings, pacs, runtime):
     settings.cache_ttl_hours = 0
-    job = one_off(conn)
+    one_off(conn)
     gateway, janitor = make_gateway(conn, pacs, settings), Janitor(conn, settings, disk_fraction=lambda: 0.1)
     drain(gateway)
     janitor.sweep()

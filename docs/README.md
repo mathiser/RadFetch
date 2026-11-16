@@ -27,6 +27,7 @@ the load on the PACS within limits you set.
 - [Users and permissions](users.md): roles, individual permissions, flow restrictions, tokens, audit log
 - [High availability](high-availability.md): redundant services, Docker Swarm, what is and is not covered
 - [Troubleshooting](troubleshooting.md): what an error or symptom means and what to do
+- [Upgrade notes](upgrading.md): changes that need something from you when upgrading
 - [API reference](api.md) and [command line reference](cli.md)
 
 ## Working on RadFetch
