@@ -53,6 +53,7 @@ Open http://localhost:8000, submit accession number `ACC0001` with the flow
 - Web interface with dashboards, HTTP API, Prometheus metrics, webhook notifications
 - User accounts with five roles, individually adjustable permissions and per-flow restrictions; audit log
 - Redundant services with automatic takeover; example Docker Swarm stack
+- Structured results: flows report arbitrary JSON, stored per job, searchable and exportable as CSV
 - Traceability: per-run image digest, a manifest with every result, an audit trail per job
 - TLS for DICOM connections; crash-safe by design, with Postgres as the only state store
 

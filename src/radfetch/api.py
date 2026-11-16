@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import secrets
 import time
 import uuid
@@ -371,6 +372,74 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if state is None:
             raise HTTPException(409, "only failed or cancelled jobs can be retried")
         return {"state": state}
+
+    # --- results -------------------------------------------------------------------------
+
+    def parse_contains(contains: str | None):
+        if not contains:
+            return None
+        try:
+            return json.loads(contains)
+        except ValueError as exc:
+            raise HTTPException(422, "contains must be JSON, for example {\"grade\": 3}") from exc
+
+    def result_row(row: dict, user: Principal) -> dict:
+        if not user.can("identifiers.view"):
+            row = {**row, "accession_number": None, "study_instance_uid": None}
+        return row
+
+    @app.get("/jobs/{job_id}/result")
+    def job_result(job_id: uuid.UUID, conn=Depends(db), user: Principal = Depends(need("results.view"))):
+        """The structured result the flow reported for this job."""
+        visible_job(conn, job_id, user)
+        return found(store.get_result(conn, job_id))
+
+    @app.get("/results/flows")
+    def results_flows(conn=Depends(db), user: Principal = Depends(need("results.view"))):
+        return store.result_flows(conn, flows_of(user))
+
+    @app.get("/results")
+    def results(
+        flow: str | None = None,
+        contains: str | None = None,
+        limit: int = 200,
+        conn=Depends(db),
+        user: Principal = Depends(need("results.view")),
+    ):
+        """Result documents, newest first. `contains` keeps documents containing that JSON."""
+        rows = store.list_results(conn, flow, parse_contains(contains), min(limit, 5000), flows_of(user))
+        return [result_row(r, user) for r in rows]
+
+    @app.get("/results.csv")
+    def results_csv(
+        flow: str,
+        contains: str | None = None,
+        conn=Depends(db),
+        user: Principal = Depends(need("results.view")),
+    ):
+        """One flow's results as a table: one column per top-level key; nested values as JSON text."""
+        rows = [result_row(r, user) for r in store.list_results(conn, flow, parse_contains(contains), 100_000, flows_of(user))]
+        keys = sorted({k for r in rows if isinstance(r["data"], dict) for k in r["data"]})
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["accession_number", "study_instance_uid", "job_id", "flow_version", "created_at", *keys])
+
+        def cell(value):
+            if value is None:
+                return ""
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            # A leading = + - @ would be run as a formula by spreadsheet programs.
+            return "'" + value if isinstance(value, str) and value[:1] in "=+-@" else value
+
+        for r in rows:
+            data = r["data"] if isinstance(r["data"], dict) else {}
+            writer.writerow([cell(r["accession_number"]), cell(r["study_instance_uid"]), r["job_id"], cell(r["flow_version"]),
+                             r["created_at"].isoformat(), *[cell(data.get(k)) for k in keys]])
+        return Response(
+            out.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="results-{flow}.csv"'},
+        )
 
     # --- batches -------------------------------------------------------------------------
 

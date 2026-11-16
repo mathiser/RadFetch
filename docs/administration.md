@@ -106,7 +106,8 @@ Three places hold patient data on disk, all under the data folder:
 `RADFETCH_KEEP_FAILED_HOURS` keeps the input and run files of failed jobs longer,
 so they can be inspected and retried without asking the PACS again.
 
-The database keeps accession numbers, UIDs and the event history indefinitely.
+The database keeps accession numbers, UIDs, the event history and the results
+flows report indefinitely.
 If you need to remove old jobs, delete them from the `jobs` table; their runs,
 deliveries and series links go with them.
 

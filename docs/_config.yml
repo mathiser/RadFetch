@@ -1,0 +1,4 @@
+# Used only when GitHub Pages renders this folder itself (Source: branch main, folder /docs).
+# The MkDocs site (Source: GitHub Actions) ignores it.
+title: RadFetch
+description: Containerized workflows on studies from a clinical PACS, without overloading it

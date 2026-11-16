@@ -64,6 +64,7 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 | `RADFETCH_GPU_DEVICE_IDS` | empty (all) | GPUs this executor hands to `gpu` flows, e.g. `0` or `0,1` |
 | `RADFETCH_CONTAINER_NETWORK` | `none` | Docker network mode for flow containers |
 | `RADFETCH_DEBUG_FAKE_GPU` | `false` | Debug only: run `gpu` flows without a GPU. Never in production |
+| `RADFETCH_RESULTS_MAX_BYTES` | `1000000` | Largest `results.json` stored with a job |
 | `RADFETCH_DELIVER_MAX_ATTEMPTS` | `8` | Delivery attempts per destination before the job fails |
 
 ## Push ingress

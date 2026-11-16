@@ -31,7 +31,8 @@ jobs:
           path: site
 
   deploy:
-    # Needs Pages enabled once: repository Settings -> Pages -> Source: GitHub Actions.
+    # Publishes the MkDocs site when Pages is set to Source: GitHub Actions. With the source set to a
+    # branch folder (main /docs), GitHub renders docs/ itself and this job has nothing to do.
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
@@ -42,5 +43,15 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - id: mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          type=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type 2>/dev/null || echo unknown)
+          echo "Pages build type: $type"
+          echo "type=$type" >> "$GITHUB_OUTPUT"
       - id: deployment
+        if: steps.mode.outputs.type == 'workflow'
         uses: actions/deploy-pages@v4
+      - if: steps.mode.outputs.type != 'workflow'
+        run: echo "::notice::Pages is not set to 'GitHub Actions', so the MkDocs site was built but not published. GitHub publishes docs/ itself."

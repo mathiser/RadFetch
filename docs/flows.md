@@ -123,6 +123,34 @@ separately, and a failed delivery never repeats inference.
 Every successful run also gets a `radfetch.json` in its output, recording the
 job, flow version, exact image digest and input series.
 
+## Reporting results
+
+Besides files, a flow can report **structured results**: measurements, scores,
+labels, quality flags, anything expressible as JSON. The container writes them to
+`/output/results.json`:
+
+```json
+{"volume_ml": 412.5, "grade": 3, "nodules": [{"mm": 6, "lobe": "RUL"}, {"mm": 11, "lobe": "LLL"}]}
+```
+
+RadFetch stores the document with the job. Nothing has to be declared in advance:
+each flow, and each version of it, can report whatever shape it likes. The results
+can then be:
+
+- seen on the job's page and on the **Results** page of the web interface, as a table with one column per top-level key;
+- searched for documents *containing* some JSON, such as `{"grade": 3}` or `{"nodules": [{"lobe": "RUL"}]}`;
+- exported as CSV per flow, or read as JSON through the API (see [API reference](api.md)).
+
+Things to know:
+
+- The file must hold a JSON object or array, be at most `RADFETCH_RESULTS_MAX_BYTES` (1 MB by default), and contain no NUL characters. A file that breaks these rules is not stored; the job still succeeds, and its history says why.
+- One document is kept per job. A rerun replaces it.
+- Use `results_file:` in the flow to name a different file under `/output`.
+- The file is also delivered like any other output file to `directory` destinations.
+- Results stay as long as the job exists; they are not affected by cache or run-file cleanup.
+- Seeing them needs the `results.view` permission (role `viewer` and up). They are patient-related data even when they hold no identifiers.
+- For large or binary results (masks, images, reports), write files and use a destination. The results store is for data you want to query.
+
 ## Triggers (push)
 
 Without a `trigger`, a flow runs only when a job is submitted for it. With one,

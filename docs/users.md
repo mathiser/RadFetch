@@ -12,7 +12,7 @@ Each role includes everything the role before it may do.
 | Role | Meant for | Adds |
 |---|---|---|
 | `monitor` | IT monitoring, wall displays | See dashboards, and jobs and batches with their states, **without** patient identifiers |
-| `viewer` | Clinicians and researchers who follow up results | See accession numbers, study UIDs, error texts and job histories; download batch CSVs |
+| `viewer` | Clinicians and researchers who follow up results | See accession numbers, study UIDs, error texts and job histories; download batch CSVs; see, search and export the results flows report |
 | `submitter` | People who run flows | Submit one-off jobs and batches; cancel, retry, pause and resume **their own** |
 | `operator` | The team that runs the service | Cancel, retry, pause and resume **anyone's** jobs and batches |
 | `admin` | Administrators | Manage users and tokens; read the audit log |
@@ -27,6 +27,7 @@ from a single user.
 | `jobs.view` | See jobs, batches and their states | monitor |
 | `stats.view` | See dashboards and metrics | monitor |
 | `identifiers.view` | See accession numbers, study UIDs, error texts and job histories | viewer |
+| `results.view` | See, search and export the structured results flows report | viewer |
 | `jobs.submit` | Submit one-off jobs | submitter |
 | `batches.submit` | Submit batches | submitter |
 | `jobs.manage_own` | Cancel, retry, pause and resume what they submitted | submitter |
@@ -45,6 +46,7 @@ grants, minus individual denies.
 | A technician who may submit one-off jobs but not batches | Role `submitter`, deny `batches.submit` |
 | A quality manager who reads the audit log but changes nothing | Role `viewer`, grant `audit.view` |
 | A statistician who follows throughput without seeing identifiers | Role `monitor` |
+| A researcher who analyses results without knowing whose they are | Role `viewer`, deny `identifiers.view` |
 | A pipeline that submits jobs from another system | Service account with role `submitter` and an API token |
 
 ## Flow restrictions

@@ -57,6 +57,10 @@ sudo cat data/results/*/instance_count.txt
 It prints `12`: the container saw only the thorax series, not the scout or the
 dose report. Next to it is `radfetch.json`, which records what produced the result.
 
+The example flow also reports a small structured result (`results.json`). Open the
+**Results** page to see it as a table, one row per job; with real flows this is
+where measurements and scores end up, ready to search and export.
+
 ## 3. Run a batch
 
 On the **Submit** page, under **Batch**, enter a name, keep the flow, paste these

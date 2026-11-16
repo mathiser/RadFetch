@@ -104,7 +104,7 @@ const STATES = ["queued", "retrieving", "ready", "running", "sending", "done", "
 const TERMINAL = ["done", "failed", "cancelled"];
 const TONE = { done: "ok", failed: "bad", cancelled: "muted", running: "warn" };
 let me = null, timer = null, roleInfo = null;
-const view = { job: null, user: null, hours: 24, state: "", search: "" };
+const view = { job: null, user: null, hours: 24, state: "", search: "", flow: "", contains: "" };
 
 // ---- helpers ------------------------------------------------------------------------
 function el(tag, props = {}, ...children) {
@@ -185,7 +185,7 @@ function showLogin() {
 }
 
 const TABS = [
-  ["dashboard", "Dashboard", "stats.view"], ["jobs", "Jobs", "jobs.view"], ["batches", "Batches", "jobs.view"],
+  ["dashboard", "Dashboard", "stats.view"], ["jobs", "Jobs", "jobs.view"], ["batches", "Batches", "jobs.view"], ["results", "Results", "results.view"],
   ["submit", "Submit", null], ["users", "Users", "users.manage"], ["audit", "Audit log", "audit.view"], ["account", "Account", null],
 ];
 function tabs() {
@@ -208,14 +208,14 @@ async function start() {
     me.auth_enabled ? el("button", { className: "small", onclick: signOut }, "Sign out") : "");
   if (!me.auth_enabled) $("who").prepend(el("span", { className: "pill warn", title: "Create an admin with: radfetch user create <name> --role admin" }, "no accounts yet: anyone can use this"));
   clearInterval(timer);
-  timer = setInterval(() => { if (["dashboard", "jobs", "batches"].includes(current())) render(true).catch(() => {}); }, 5000);
+  timer = setInterval(() => { if (["dashboard", "jobs", "batches", "results"].includes(current())) render(true).catch(() => {}); }, 5000);
   await render();
 }
 async function signOut() {
   try { await post("/auth/logout"); } catch {}
   setToken(null);
   history.replaceState(null, "", location.pathname);  // the next person starts on their own first page
-  Object.assign(view, { job: null, user: null, state: "", search: "" });
+  Object.assign(view, { job: null, user: null, state: "", search: "", flow: "", contains: "" });
   showLogin();
 }
 window.onhashchange = () => render().catch((e) => toast(e.message, "bad"));
@@ -370,10 +370,39 @@ const VIEWS = {
         lines.push("");
         for (const e of j.events) lines.push(`${when(e.at)}  ${e.kind}${Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : ""}`);
         for (const r of j.runs) { lines.push("", `run ${r.attempt}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`); if (r.image_digest) lines.push(`  image ${r.image_digest}`); }
+        if (can("results.view")) {
+          try { const r = await api(`/jobs/${j.id}/result`); lines.push("", "result reported by the flow:", JSON.stringify(r.data, null, 2)); } catch {}
+        }
         out.push(el("section", { id: "detail" }, el("div", { className: "bar" }, el("h2", {}, "Job history"), el("button", { className: "small", onclick: () => { view.job = null; render(); } }, "Close")), el("pre", { id: "detail-body" }, lines.join("\n"))));
       } catch { view.job = null; }
     }
     return out;
+  },
+
+  async results() {
+    const flows = await api("/results/flows");
+    if (!flows.length) return [el("section", {}, el("h2", {}, "Results"), el("p", { className: "muted" }, "No flow has reported results yet. A flow reports results by writing a results.json file to /output."))];
+    if (!flows.some((f) => f.flow === view.flow)) view.flow = flows[0].flow;
+    const q = new URLSearchParams({ flow: view.flow, limit: 500 });
+    if (view.contains) q.set("contains", view.contains);
+    let rows = [], problem = "";
+    try { rows = await api("/results?" + q); } catch (e) { problem = e.message; }
+    const pick = el("select", { id: "result-flow", ariaLabel: "Flow" }, ...flows.map((f) => el("option", { value: f.flow, selected: f.flow === view.flow }, `${f.flow} (${num(f.n)})`)));
+    pick.onchange = () => { view.flow = pick.value; render(); };
+    const filter = el("input", { id: "result-filter", placeholder: 'Containing, e.g. {"grade": 3}', value: view.contains, ariaLabel: "Filter", style: "min-width:260px" });
+    filter.onchange = () => { view.contains = filter.value.trim(); render(); };
+    const keys = [...new Set(rows.flatMap((r) => (r.data && !Array.isArray(r.data) && typeof r.data === "object") ? Object.keys(r.data) : []))].sort();
+    const show = (v) => v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    const csv = el("button", { className: "small", onclick: () => act(async () => {
+      const r = await api("/results.csv?" + new URLSearchParams(view.contains ? { flow: view.flow, contains: view.contains } : { flow: view.flow }), { raw: true });
+      const a = el("a", { href: URL.createObjectURL(await r.blob()), download: `results-${view.flow}.csv` }); a.click(); URL.revokeObjectURL(a.href); }) }, "CSV");
+    return [el("section", {}, el("div", { className: "bar" }, el("h2", {}, "Results"), pick, filter, csv, el("span", { className: problem ? "bad" : "muted" }, problem || `${rows.length} shown`)),
+      el("div", { className: "scroll" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Accession"), el("th", {}, "Reported"), ...keys.map((k) => el("th", {}, k)))),
+        el("tbody", { id: "results" }, ...(rows.length ? rows.map((r) => el("tr", { className: "pick", onclick: () => { view.job = r.job_id; location.hash = "#jobs"; } },
+          el("td", { className: "mono" }, r.accession_number ?? "hidden"), el("td", {}, when(r.created_at)),
+          ...(keys.length ? keys.map((k) => { const v = r.data[k]; return el("td", { className: typeof v === "number" ? "num" : "wrap mono" }, show(v)); }) : [el("td", { className: "wrap mono" }, show(r.data))])))
+          : [el("tr", {}, el("td", { colSpan: 2 + keys.length, className: "muted" }, "No results match."))])))))];
   },
 
   async batches() {

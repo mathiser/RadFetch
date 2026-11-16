@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     # gets RADFETCH_FAKE_GPU=1 so a test image can take a CPU path. Never set this in production.
     debug_fake_gpu: bool = False
     deliver_max_attempts: int = 8
+    # Largest results file (bytes) stored with a job; larger files are left as files only.
+    results_max_bytes: int = 1_000_000
 
     # --- Push ingress (storage SCP) -------------------------------------------
     scp_port: int = 11114

@@ -16,6 +16,7 @@ PERMISSIONS = {
     "jobs.view": "See jobs, batches and their states",
     "identifiers.view": "See accession numbers, study UIDs, error texts and job histories",
     "stats.view": "See dashboards and metrics",
+    "results.view": "See, search and export the structured results flows report",
     "jobs.submit": "Submit one-off jobs",
     "batches.submit": "Submit batches",
     "jobs.manage_own": "Cancel, retry, pause and resume jobs and batches they submitted",
@@ -27,7 +28,7 @@ PERMISSIONS = {
 # Each role includes everything of the role before it.
 _LEVELS = [
     ("monitor", ["jobs.view", "stats.view"]),
-    ("viewer", ["identifiers.view"]),
+    ("viewer", ["identifiers.view", "results.view"]),
     ("submitter", ["jobs.submit", "batches.submit", "jobs.manage_own"]),
     ("operator", ["jobs.manage_all"]),
     ("admin", ["audit.view", "users.manage"]),

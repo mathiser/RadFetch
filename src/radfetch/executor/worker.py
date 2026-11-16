@@ -190,7 +190,8 @@ class Executor:
             if code == 0:
                 self._write_manifest(run_id, run_dir)
                 destinations = [d.model_dump() for d in flow.destinations]
-                store.run_succeeded(self.conn, job_id, run_id, self.owner, destinations)
+                result, problem = self._read_result(flow, run_dir)
+                store.run_succeeded(self.conn, job_id, run_id, self.owner, destinations, result, problem)
                 log.info("job %s: run %s succeeded", job_id, run_id)
             else:
                 self._fail_run(job, flow, run, f"container exited with code {code}", code)
@@ -205,6 +206,25 @@ class Executor:
             self.conn, job["id"], run["id"], self.owner, error, exit_code, retry, self.s.backoff_s(run["attempt"])
         )
         log.warning("job %s: run %s failed (%s)%s", job["id"], run["id"], error, ", will retry" if retry else "")
+
+    def _read_result(self, flow: Flow, run_dir: Path):
+        """The flow's structured result, if it wrote one: (document, None) or (None, why it was not stored)."""
+        out = (run_dir / "out").resolve()
+        path = (out / flow.results_file).resolve()
+        if out not in path.parents or not path.is_file():  # absent, or a path pointing outside /output
+            return None, None
+        if path.stat().st_size > self.s.results_max_bytes:
+            return None, f"{flow.results_file} is larger than {self.s.results_max_bytes} bytes"
+        try:
+            text = path.read_text(encoding="utf-8")
+            if "\\u0000" in text or "\x00" in text:
+                return None, f"{flow.results_file} contains NUL characters, which cannot be stored"
+            data = json.loads(text)
+        except (OSError, ValueError) as exc:
+            return None, f"{flow.results_file} is not valid JSON: {exc}"
+        if not isinstance(data, (dict, list)):
+            return None, f"{flow.results_file} must hold a JSON object or array"
+        return data, None
 
     def _write_manifest(self, run_id, run_dir: Path) -> None:
         """Put radfetch.json next to the results so they carry their own provenance."""

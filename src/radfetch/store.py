@@ -582,8 +582,20 @@ def finish_run(conn: Conn, run_id: uuid.UUID, state: str, exit_code: int | None 
     )
 
 
-def run_succeeded(conn: Conn, job_id: uuid.UUID, run_id: uuid.UUID, owner: str, destinations: list[dict]) -> bool:
-    """running -> sending (one delivery per destination), or -> done when there is nowhere to send."""
+def run_succeeded(
+    conn: Conn,
+    job_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner: str,
+    destinations: list[dict],
+    result: Any = None,
+    result_problem: str | None = None,
+) -> bool:
+    """running -> sending (one delivery per destination), or -> done when there is nowhere to send.
+
+    `result` is the flow's structured result document, stored with the job in the same
+    transaction; `result_problem` says why a result file was not stored.
+    """
     with conn.transaction():
         cur = conn.execute(
             "update jobs set state = %s, error = null, lease_owner = null, lease_expires_at = null, updated_at = now()"
@@ -599,9 +611,53 @@ def run_succeeded(conn: Conn, job_id: uuid.UUID, run_id: uuid.UUID, owner: str, 
                 (uuid.uuid4(), job_id, run_id, Jsonb(dest)),
             )
         log_event(conn, job_id, "run_succeeded", run=str(run_id))
+        if result is not None:
+            conn.execute(
+                "insert into results (job_id, run_id, flow, flow_version, data)"
+                " select j.id, %s, j.flow, j.flow_version, %s from jobs j where j.id = %s"
+                " on conflict (job_id) do update set run_id = excluded.run_id, flow_version = excluded.flow_version,"
+                " data = excluded.data, created_at = now()",
+                (run_id, Jsonb(result), job_id),
+            )
+            log_event(conn, job_id, "result_stored", run=str(run_id))
+        elif result_problem:
+            log_event(conn, job_id, "result_rejected", run=str(run_id), reason=result_problem)
         if not destinations:
             log_event(conn, job_id, "done")
     return True
+
+
+def get_result(conn: Conn, job_id: uuid.UUID) -> Row | None:
+    return conn.execute(
+        "select run_id, flow, flow_version, data, created_at from results where job_id = %s", (job_id,)
+    ).fetchone()
+
+
+def list_results(
+    conn: Conn,
+    flow: str | None = None,
+    contains: Any = None,
+    limit: int = 200,
+    flows: list[str] | None = None,
+) -> list[Row]:
+    """Result documents, newest first. `contains` keeps documents that contain that JSON (Postgres @>)."""
+    return conn.execute(
+        "select r.job_id, j.accession_number, j.study_instance_uid, r.flow, r.flow_version, r.created_at, r.data"
+        " from results r join jobs j on j.id = r.job_id"
+        " where (%(flow)s::text is null or r.flow = %(flow)s)"
+        " and (%(flows)s::text[] is null or r.flow = any(%(flows)s))"
+        " and (%(contains)s::jsonb is null or r.data @> %(contains)s::jsonb)"
+        " order by r.created_at desc limit %(limit)s",
+        {"flow": flow, "flows": flows, "contains": None if contains is None else Jsonb(contains), "limit": limit},
+    ).fetchall()
+
+
+def result_flows(conn: Conn, flows: list[str] | None = None) -> list[Row]:
+    return conn.execute(
+        "select flow, count(*) as n from results where (%(f)s::text[] is null or flow = any(%(f)s))"
+        " group by flow order by flow",
+        {"f": flows},
+    ).fetchall()
 
 
 def run_failed(

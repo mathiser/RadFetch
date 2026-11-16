@@ -107,6 +107,9 @@ class Flow(BaseModel):
     shm_size: str | None = None
     max_attempts: int = 2
     destinations: list[Destination] = []
+    # A JSON file the container may write under /output with structured results (measurements,
+    # scores, labels...). It is stored with the job and can be queried and exported.
+    results_file: str = "results.json"
     # Without a trigger the flow only runs when a job is submitted for it.
     trigger: Trigger | None = None
 

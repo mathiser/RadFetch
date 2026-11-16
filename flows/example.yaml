@@ -17,7 +17,7 @@ multiple_studies: fail
 # exit code 0 on success. The container has no network by default.
 image: busybox:1.36
 # Optional; omit to use the image's own entrypoint.
-command: ["sh", "-c", "find /input -type f | wc -l > /output/instance_count.txt"]
+command: ["sh", "-c", "n=$(find /input -type f | wc -l); echo $n > /output/instance_count.txt; echo \"{\\\"instances\\\": $n, \\\"series\\\": $(ls /input | wc -l)}\" > /output/results.json"]
 gpu: false
 timeout_s: 600
 max_attempts: 2

@@ -29,7 +29,7 @@ def test_roles_build_on_each_other():
         assert auth.ROLES[lower] < auth.ROLES[higher]
     assert set().union(*auth.ROLES.values()) == set(auth.PERMISSIONS)  # every permission is reachable
     assert auth.effective_permissions("viewer", ["jobs.submit"], ["identifiers.view"]) == {
-        "jobs.view", "stats.view", "jobs.submit"}
+        "jobs.view", "stats.view", "results.view", "jobs.submit"}
 
 
 def test_password_hashing():
@@ -89,7 +89,7 @@ def test_individual_grants_denies_and_flow_restriction(conn, client):
     pat = {"Authorization": "Bearer " + client.post("/users/pat/tokens", json={}, headers=admin).json()["token"]}
 
     me = client.get("/whoami", headers=pat).json()
-    assert me["permissions"] == ["jobs.manage_own", "jobs.submit", "jobs.view", "stats.view"]
+    assert me["permissions"] == ["jobs.manage_own", "jobs.submit", "jobs.view", "results.view", "stats.view"]
     assert me["allowed_flows"] == ["seg"] and client.get("/flows", headers=pat).json() == ["seg"]
 
     assert client.post("/jobs", json={"accession_number": "A", "flow": "allct"}, headers=pat).status_code == 403

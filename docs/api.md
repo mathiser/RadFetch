@@ -38,6 +38,22 @@ Jobs and batches of flows an account is not allowed to see behave as if they did
 | `POST /jobs/{id}/cancel` | own: `jobs.manage_own`; others': `jobs.manage_all` | Cancel. A running container is stopped within a few seconds |
 | `POST /jobs/{id}/retry?full=false` | as cancel | Retry a failed or cancelled job. Re-sends only, if just the delivery failed, unless `full=true`. `409` for other states |
 
+## Results
+
+| Method and path | Needs | Does |
+|---|---|---|
+| `GET /jobs/{id}/result` | `results.view` | The structured result the flow reported for the job (`404` if none) |
+| `GET /results?flow=&contains=&limit=` | `results.view` | Result documents, newest first. `contains` is JSON; only documents containing it are returned |
+| `GET /results.csv?flow=&contains=` | `results.view` | One flow's results as a table: a column per top-level key, nested values as JSON text |
+| `GET /results/flows` | `results.view` | Flows that have results, with counts |
+
+Accession numbers and study UIDs in these responses are blank without `identifiers.view`.
+
+```bash
+curl -G http://localhost:8000/results -H "Authorization: Bearer $RADFETCH_TOKEN" \
+  --data-urlencode 'flow=lung-seg' --data-urlencode 'contains={"grade": 3}'
+```
+
 ## Batches
 
 | Method and path | Needs | Does |
