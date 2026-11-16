@@ -32,7 +32,7 @@ Then start everything, including the fake PACS:
 docker compose --profile dev up -d --build
 ```
 
-Open http://localhost:8000. The header should show **gateway up**, **PACS reachable** and **batch window open**.
+Open http://localhost:8000. The **Dashboard** opens; its **PACS** tile should say **reachable**, with "batch window open" beneath it.
 
 ## 2. Run a one-off job
 
@@ -40,10 +40,10 @@ The repository ships one flow, `example` (`flows/example.yaml`). It selects CT
 series whose description contains "thorax", runs a small container that counts
 the files it was given, and writes the result to `data/results/`.
 
-In the UI, under **One-off job**, enter `ACC0001`, keep the flow `example`, and
-press **Run now**.
+On the **Submit** page, under **One-off job**, enter `ACC0001`, keep the flow
+`example`, and press **Run now**.
 
-Watch the job in the **Jobs** table move through `queued`, `retrieving`, `ready`,
+On the **Jobs** page, watch the job move through `queued`, `retrieving`, `ready`,
 `running`, `sending` and `done`. This takes a few seconds. Click the row to see
 its history: which series were selected, when the run started, and the exact
 image it used.
@@ -59,8 +59,8 @@ dose report. Next to it is `radfetch.json`, which records what produced the resu
 
 ## 3. Run a batch
 
-Under **Batch**, enter a name, keep the flow, paste these accession numbers and
-press **Queue batch**:
+On the **Submit** page, under **Batch**, enter a name, keep the flow, paste these
+accession numbers and press **Queue batch**:
 
 ```
 ACC0002
@@ -70,7 +70,7 @@ ACC0005
 NOT-A-REAL-ONE
 ```
 
-The batch appears under **Batches** with its progress. Four jobs finish; the fifth
+The **Batches** page opens and shows the batch with its progress. Four jobs finish; the fifth
 fails with "no study found for accession number NOT-A-REAL-ONE". Things to try
 while it runs or afterwards:
 
@@ -80,8 +80,8 @@ while it runs or afterwards:
 
 ## 4. See the PACS protection at work
 
-Queue a second batch with `ACC0006` to `ACC0015`. While it runs, look at the job
-counts in the header: the number of `ready` jobs never goes above 4. The gateway
+Queue a second batch with `ACC0006` to `ACC0015`. While it runs, look at the
+**Active jobs** tile on the Dashboard: the number of `ready` jobs never goes above 4. The gateway
 only fetches a few studies ahead of the executor instead of pulling all ten at
 once. That limit is `RADFETCH_MAX_STAGED_JOBS`.
 
@@ -101,17 +101,22 @@ After 30 quiet seconds (`RADFETCH_SCP_STABLE_S`) a job with source `push` appear
 and runs. Send another with `--calling-aet MR_ROOM1`: nothing starts, because no
 flow's trigger matches that sender.
 
-## 6. Turn on authentication
+## 6. Create accounts
 
-Until a token exists the API is open. Create one:
+Until an account exists, anyone who can reach the interface can use it. Create
+an administrator:
 
 ```bash
-docker compose exec api radfetch token create me --role operator
+docker compose exec api radfetch user create me --role admin
 ```
 
-Copy the token it prints; it is shown only once. Reload the UI: it now asks for
-the token, and your name appears in the header. Jobs you submit are recorded
-under that name.
+Copy the password it prints; it is shown only once. Reload the page and sign in.
+The **Users** page now lets you add people. Try it:
+
+1. Create a user `wall` with the role `monitor` and sign in as that user in a private window. The dashboard and job states are there, but accession numbers are hidden and nothing can be submitted.
+2. As the administrator, create a user with the role `submitter`, select it, set "Submit batches" to "never allow", and save. That user can run one-off jobs but not batches.
+
+[Users and permissions](users.md) explains the roles and what can be adjusted.
 
 ## 7. Clean up
 

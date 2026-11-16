@@ -56,13 +56,14 @@ before, do the [Tutorial](tutorial.md) first.
   docker compose up -d --build
   ```
 
-- [ ] Create your token before exposing the API beyond localhost (creating the first token turns authentication on):
+- [ ] Create the first administrator before exposing the API beyond localhost (until an account exists, anyone who can reach it can use it):
 
   ```bash
-  docker compose exec api radfetch token create <your-name> --role operator
+  docker compose exec api radfetch user create <your-name> --role admin
   ```
 
-- [ ] Open the UI at http://localhost:8000 and check the header shows "gateway up" and "PACS reachable".
+- [ ] Sign in at http://localhost:8000 with the printed password, change it under **Account**, and check that the Dashboard's PACS tile says "reachable".
+- [ ] Create accounts for the people who will use it, with the lowest role that fits each (see [Users and permissions](users.md)).
 
 ## 6. Trial against the PACS
 

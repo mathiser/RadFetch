@@ -11,11 +11,14 @@ src/radfetch/
   ingress.py          push ingress (storage SCP)
   sender.py           deliveries and notifications
   janitor.py          cache eviction and cleanup
-  api.py, ui.html     HTTP API and the single-page UI
+  auth.py             roles, permissions, password hashing
+  api.py, ui.html     HTTP API and the single-page web interface
   cli.py              command line
   devtools/fakepacs.py  in-memory PACS (DIMSE and DICOMweb) for tests and demos
 tests/                unit and integration tests
 scripts/smoke.sh      full Compose stack test
+deploy/              example Docker Swarm stack
+mkdocs.yml            documentation site (published by .github/workflows/docs.yml)
 ```
 
 Design rules worth keeping:
@@ -55,6 +58,14 @@ PACS, runs a `gpu: true` flow with the fake GPU, and checks the results.
 
 CI (`.github/workflows/test.yml`) runs all of the above except the real-GPU test
 on every pull request and push to `main`.
+
+## Documentation site
+
+```bash
+pip install 'mkdocs-material==9.5.*' && mkdocs serve
+```
+
+The site is built with `--strict` in CI, so a broken link fails the build.
 
 ## Changing the schema
 

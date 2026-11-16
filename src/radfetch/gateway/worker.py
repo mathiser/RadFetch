@@ -59,9 +59,7 @@ class Gateway:
         self._last_heartbeat = float("-inf")
         self._outage_notified = False
         self._tmp = settings.cache_dir / ".tmp"
-        # Leftovers from a crash mid-retrieval; nothing references them.
-        shutil.rmtree(self._tmp, ignore_errors=True)
-        self._tmp.mkdir(parents=True, exist_ok=True)
+        self._leading = False
 
     # --- loop ------------------------------------------------------------------------
 
@@ -71,10 +69,25 @@ class Gateway:
 
     def step(self) -> bool:
         """Do at most one unit of PACS work. Returns False when there was nothing admissible."""
+        if not self._lead():
+            return False
         self._heartbeat()
         if not self.breaker.allow():
             return False
         return self.resolve_one() or self.retrieve_one()
+
+    def _lead(self) -> bool:
+        """Only one gateway may talk to the PACS. Further instances stand by and take over if it goes away."""
+        if self._leading:
+            return True
+        if not store.try_lead(self.conn, "gateway"):
+            return False
+        self._leading = True
+        # Leftovers from a crash mid-retrieval; nothing references them. Safe now that we are the only one.
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        self._tmp.mkdir(parents=True, exist_ok=True)
+        log.info("%s is now the active gateway", self.owner)
+        return True
 
     def _heartbeat(self) -> None:
         """Publish gateway state for /healthz and /metrics, at most every 10 seconds."""
@@ -88,6 +101,7 @@ class Gateway:
             consecutive_failures=self.breaker.failures,
             batch_window_open=self.windows.is_open(self._now()),
             rate_budget_ok=self.bucket.ready(),
+            disk_used_fraction=round(self._disk_fraction(), 3),
         )
 
     def _pace(self) -> None:

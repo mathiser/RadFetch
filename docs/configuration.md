@@ -79,10 +79,11 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RADFETCH_API_TOKEN` | none | One shared operator token, in addition to named tokens |
+| `RADFETCH_API_TOKEN` | none | One shared token with operator rights, outside the accounts |
+| `RADFETCH_SESSION_HOURS` | `12` | How long a sign-in in the web interface lasts |
 | `RADFETCH_NOTIFY_WEBHOOK_URL` | empty (off) | Where to POST notifications |
 | `RADFETCH_NOTIFY_INCLUDE_IDENTIFIERS` | `false` | Include accession numbers and error text in notifications |
-| `RADFETCH_PUBLIC_URL` | empty | Address of the UI, added as a link in notifications |
+| `RADFETCH_PUBLIC_URL` | empty | Address of the web interface. Added as a link in notifications; when it starts with `https://`, session cookies are marked secure |
 | `RADFETCH_NOTIFY_MAX_ATTEMPTS` | `6` | Attempts per notification |
 
 ## Retention

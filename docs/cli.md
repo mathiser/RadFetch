@@ -34,9 +34,12 @@ docker compose exec -T api radfetch batch "March cohort" example /dev/stdin < ac
 
 | Command | Does |
 |---|---|
-| `token create <name> [--role viewer\|operator]` | Create a named API token and print it once |
-| `token list` | List tokens with role and revocation time |
-| `token revoke <name>` | Revoke a token |
+| `user create <name> [--role R] [--flows a,b] [--service-account] [--password-stdin]` | Create an account. Prints a generated password once |
+| `user set <name> [--role R] [--grant P] [--deny P] [--clear-adjustments] [--flows a,b] [--all-flows] [--disable] [--enable]` | Change role, individual permissions, flow restriction, or disable |
+| `user passwd <name> [--password-stdin]` | Set a new password and sign the user out everywhere |
+| `user list`, `user delete <name>`, `user roles` | List accounts, delete one, show roles and permissions |
+| `token create <username> [--name label]` | Create an API token for an account and print it once |
+| `token list`, `token revoke <label>` | List tokens, revoke one |
 | `check-flows` | Validate every flow file; exits non-zero if one is invalid |
 | `init-db` | Apply pending database schema changes. Compose runs this at every start |
 

@@ -264,32 +264,157 @@ def check_flows():
     raise typer.Exit(1 if bad else 0)
 
 
-token_app = typer.Typer(no_args_is_help=True, help="Manage named API tokens.")
+user_app = typer.Typer(no_args_is_help=True, help="Manage user accounts.")
+token_app = typer.Typer(no_args_is_help=True, help="Manage API tokens.")
+app.add_typer(user_app, name="user")
 app.add_typer(token_app, name="token")
 
 
-@token_app.command("create")
-def token_create(name: str, role: str = typer.Option("operator", help="viewer (read-only) or operator")):
-    """Create a token and print it once. Creating the first token turns authentication on."""
-    if role not in ("viewer", "operator"):
-        typer.echo("error: role must be viewer or operator", err=True)
-        raise typer.Exit(2)
-    conn = db.connect(Settings().database_url)
+def _admin_conn():
+    return db.connect(Settings().database_url)
+
+
+def _fail(message: str):
+    typer.echo(f"error: {message}", err=True)
+    raise typer.Exit(1)
+
+
+@user_app.command("create")
+def user_create(
+    username: str,
+    role: str = typer.Option("viewer", help="monitor, viewer, submitter, operator or admin"),
+    password_stdin: bool = typer.Option(False, help="read the password from standard input instead of generating one"),
+    service_account: bool = typer.Option(False, help="no password; the account is used with API tokens only"),
+    flows: Optional[str] = typer.Option(None, help="comma-separated flows the user is limited to (default: all)"),
+):
+    """Create a user. A generated password is printed once. The first user should be an admin."""
+    import sys
+
+    from radfetch import auth
+
+    if role not in auth.ROLES:
+        _fail(f"role must be one of: {', '.join(auth.ROLES)}")
+    password = generated = None
+    if not service_account:
+        password = sys.stdin.readline().rstrip("\n") if password_stdin else (generated := auth.generate_password())
     try:
-        typer.echo(store.create_token(conn, name, role))
+        store.create_user(
+            _admin_conn(), username, role,
+            auth.hash_password(password) if password else None,
+            allowed_flows=[f.strip() for f in flows.split(",")] if flows else None, by="cli",
+        )
     except Exception as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        _fail(str(exc).splitlines()[0])
+    typer.echo(f"created {username} ({role})")
+    if generated:
+        typer.echo(f"password: {generated}")
+
+
+@user_app.command("list")
+def user_list():
+    _print(store.list_users(_admin_conn()))
+
+
+@user_app.command("set")
+def user_set(
+    username: str,
+    role: Optional[str] = typer.Option(None),
+    grant: list[str] = typer.Option([], help="permission to add on top of the role (repeatable)"),
+    deny: list[str] = typer.Option([], help="permission to remove from the role (repeatable)"),
+    clear_adjustments: bool = typer.Option(False, help="remove all individual grants and denies"),
+    flows: Optional[str] = typer.Option(None, help="comma-separated flows to limit the user to"),
+    all_flows: bool = typer.Option(False, help="lift the flow restriction"),
+    disable: bool = typer.Option(False),
+    enable: bool = typer.Option(False),
+):
+    """Change a user's role, individual permissions, flow restriction, or disable the account."""
+    from radfetch import auth
+
+    conn = _admin_conn()
+    user = store.get_user(conn, username)
+    if user is None:
+        _fail("no such user")
+    changes: dict = {}
+    if role:
+        if role not in auth.ROLES:
+            _fail(f"role must be one of: {', '.join(auth.ROLES)}")
+        changes["role"] = role
+    try:
+        auth.validate_permissions([*grant, *deny])
+    except ValueError as exc:
+        _fail(str(exc))
+    if grant or deny or clear_adjustments:
+        base_grants, base_denies = ([], []) if clear_adjustments else (user["grants"], user["denies"])
+        changes["grants"] = sorted((set(base_grants) | set(grant)) - set(deny))
+        changes["denies"] = sorted((set(base_denies) | set(deny)) - set(grant))
+    if all_flows:
+        changes["allowed_flows"] = None
+    elif flows is not None:
+        changes["allowed_flows"] = [f.strip() for f in flows.split(",") if f.strip()]
+    if disable or enable:
+        changes["disabled"] = disable
+    try:
+        _print(store.update_user(conn, username, changes, by="cli"))
+    except ValueError as exc:
+        _fail(str(exc))
+
+
+@user_app.command("passwd")
+def user_passwd(username: str, password_stdin: bool = typer.Option(False)):
+    """Set a new password (generated unless --password-stdin). Signs the user out everywhere."""
+    import sys
+
+    from radfetch import auth
+
+    password = sys.stdin.readline().rstrip("\n") if password_stdin else auth.generate_password()
+    try:
+        ok = store.update_user(_admin_conn(), username, {"password_hash": auth.hash_password(password)}, by="cli")
+    except ValueError as exc:
+        _fail(str(exc))
+    if ok is None:
+        _fail("no such user")
+    typer.echo("password changed" if password_stdin else f"password: {password}")
+
+
+@user_app.command("delete")
+def user_delete(username: str):
+    try:
+        ok = store.delete_user(_admin_conn(), username, by="cli")
+    except ValueError as exc:
+        _fail(str(exc))
+    typer.echo("deleted" if ok else "no such user")
+
+
+@user_app.command("roles")
+def user_roles():
+    """Show the roles and the permissions that can be granted or denied individually."""
+    from radfetch import auth
+
+    for name, perms in auth.ROLES.items():
+        typer.echo(f"{name:<10} {auth.ROLE_DESCRIPTIONS[name]}")
+        typer.echo(f"{'':<10} {', '.join(sorted(perms))}")
+    typer.echo("\npermissions:")
+    for name, text in auth.PERMISSIONS.items():
+        typer.echo(f"  {name:<18} {text}")
+
+
+@token_app.command("create")
+def token_create(username: str, name: Optional[str] = typer.Option(None, help="a label for the token")):
+    """Create an API token for a user and print it once. It has that user's rights."""
+    try:
+        typer.echo(store.create_token(_admin_conn(), username, name, by="cli"))
+    except Exception as exc:
+        _fail(str(exc).splitlines()[0])
 
 
 @token_app.command("list")
 def token_list():
-    _print(store.list_tokens(db.connect(Settings().database_url)))
+    _print(store.list_tokens(_admin_conn()))
 
 
 @token_app.command("revoke")
 def token_revoke(name: str):
-    ok = store.revoke_token(db.connect(Settings().database_url), name)
+    ok = store.revoke_token(_admin_conn(), name, by="cli")
     typer.echo("revoked" if ok else "no active token with that name")
 
 

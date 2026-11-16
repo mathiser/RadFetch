@@ -21,7 +21,7 @@ Both paths end in the same place: series in the local cache and a job ready for 
 |---|---|---|
 | `postgres` | The only state store: jobs, retrievals, runs, deliveries, audit events | 1 |
 | `api` | HTTP API and web UI | 1 |
-| `gateway` | The only process that talks to the PACS | exactly 1 |
+| `gateway` | The only process that talks to the PACS | 1 active (extra replicas stand by) |
 | `scp` | Push ingress (storage SCP) | 0 or 1 |
 | `executor` | Runs one flow container at a time | 1 per GPU |
 | `sender` | Delivers results; retried independently of inference | 1 |

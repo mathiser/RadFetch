@@ -1,0 +1,107 @@
+# RadFetch on Docker Swarm. See docs/high-availability.md before using this.
+#
+#   docker stack deploy -c deploy/swarm-stack.yml radfetch
+#
+# Requirements:
+#   - ${RADFETCH_ROOT} (default /srv/radfetch) is the SAME shared filesystem (e.g. NFS) mounted at the
+#     SAME path on every node, containing data/ and flows/.
+#   - The image is in a registry every node can pull from (set RADFETCH_IMAGE).
+#   - Nodes with a GPU are labelled:   docker node update --label-add radfetch.gpu=true <node>
+#   - The node holding the database:   docker node update --label-add radfetch.db=true <node>
+#   - RADFETCH_DATABASE_URL may instead point at an external, highly available Postgres;
+#     then remove the postgres service below.
+
+x-radfetch: &radfetch
+  image: ${RADFETCH_IMAGE:-radfetch:local}
+  environment: &env
+    RADFETCH_DATABASE_URL: ${RADFETCH_DATABASE_URL:-postgresql://radfetch:radfetch@postgres:5432/radfetch}
+    RADFETCH_DATA_DIR: /data
+    RADFETCH_HOST_DATA_DIR: ${RADFETCH_ROOT:-/srv/radfetch}/data
+    RADFETCH_FLOWS_DIR: /flows
+    RADFETCH_PACS_HOST: ${RADFETCH_PACS_HOST:-pacs.example}
+    RADFETCH_PACS_PORT: ${RADFETCH_PACS_PORT:-104}
+    RADFETCH_PACS_AE_TITLE: ${RADFETCH_PACS_AE_TITLE:-PACS}
+    RADFETCH_LOCAL_AE_TITLE: ${RADFETCH_LOCAL_AE_TITLE:-RADFETCH}
+    RADFETCH_RETRIEVE_MODE: ${RADFETCH_RETRIEVE_MODE:-get}
+    RADFETCH_RATE_INSTANCES_PER_MIN: ${RADFETCH_RATE_INSTANCES_PER_MIN:-600}
+    RADFETCH_BATCH_WINDOWS: ${RADFETCH_BATCH_WINDOWS:-}
+    RADFETCH_SCP_STABLE_S: ${RADFETCH_SCP_STABLE_S:-30}
+    RADFETCH_PUBLIC_URL: ${RADFETCH_PUBLIC_URL:-}
+    RADFETCH_NOTIFY_WEBHOOK_URL: ${RADFETCH_NOTIFY_WEBHOOK_URL:-}
+    TZ: ${TZ:-Europe/Copenhagen}
+  volumes: &volumes
+    - ${RADFETCH_ROOT:-/srv/radfetch}/data:/data
+    - ${RADFETCH_ROOT:-/srv/radfetch}/flows:/flows:ro
+
+services:
+  postgres: # the one part that is not redundant here; see the documentation
+    image: postgres:16
+    environment:
+      POSTGRES_USER: radfetch
+      POSTGRES_PASSWORD: radfetch
+      POSTGRES_DB: radfetch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    deploy:
+      placement:
+        constraints: [node.labels.radfetch.db == true]
+
+  init-db: # applies schema changes, then exits
+    <<: *radfetch
+    command: init-db
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+  api:
+    <<: *radfetch
+    command: api
+    ports:
+      - "8000:8000"
+    deploy:
+      replicas: 2
+      update_config: { order: start-first }
+
+  gateway: # one replica is active, the other stands by and takes over within seconds
+    <<: *radfetch
+    command: gateway
+    ports:
+      - "11113:11113" # C-MOVE storage SCP
+    deploy:
+      replicas: 2
+
+  scp: # every replica receives; one of them turns received studies into jobs
+    <<: *radfetch
+    command: scp
+    ports:
+      - "11114:11114"
+    deploy:
+      replicas: 2
+
+  sender:
+    <<: *radfetch
+    command: sender
+    deploy:
+      replicas: 2
+
+  janitor:
+    <<: *radfetch
+    command: janitor
+    deploy:
+      replicas: 1
+
+  executor: # one per GPU node; starts flow containers on its own node
+    <<: *radfetch
+    command: executor
+    volumes:
+      - ${RADFETCH_ROOT:-/srv/radfetch}/data:/data
+      - ${RADFETCH_ROOT:-/srv/radfetch}/flows:/flows:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.radfetch.gpu == true]
+
+volumes:
+  pgdata:

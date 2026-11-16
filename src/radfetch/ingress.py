@@ -39,8 +39,14 @@ class IngressServer:
     def __init__(self, settings: Settings):
         self.s = settings
         self._tmp = settings.incoming_dir / ".tmp"
-        shutil.rmtree(self._tmp, ignore_errors=True)
         self._tmp.mkdir(parents=True, exist_ok=True)
+        # Other replicas may be receiving into the same folder: remove only files abandoned long ago.
+        for stale in self._tmp.iterdir():
+            try:
+                if time.time() - stale.stat().st_mtime > 3600:
+                    stale.unlink()
+            except OSError:
+                pass
         self._pool = ConnectionPool(
             settings.database_url, min_size=1, max_size=4, open=False,
             kwargs={"autocommit": True, "row_factory": dict_row},
@@ -111,7 +117,7 @@ class IngressProcessor:
         self._sleep = sleep
         self._work = settings.incoming_dir / ".processing"
         self._work.mkdir(parents=True, exist_ok=True)
-        self._recover()
+        self._leading = False
 
     def run_forever(self) -> None:
         run_steps(self.step, min(self.s.idle_sleep_s, 2), self._sleep)
@@ -174,6 +180,12 @@ class IngressProcessor:
         return len(files), sum(f.stat().st_size for f in files)
 
     def step(self) -> bool:
+        # Any number of replicas may receive studies; one of them turns them into jobs.
+        if not self._leading:
+            if not store.try_lead(self.conn, "ingress"):
+                return False
+            self._leading = True
+            self._recover()
         work = None
         try:
             with self.conn.transaction():

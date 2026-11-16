@@ -21,7 +21,9 @@ the load on the PACS within limits you set.
 
 ## Running it
 
-- [Administration](administration.md): users and tokens, monitoring, backup, retention, upgrades, GPUs
+- [Administration](administration.md): notifications, monitoring, backup, retention, upgrades, GPUs
+- [Users and permissions](users.md): roles, individual permissions, flow restrictions, tokens, audit log
+- [High availability](high-availability.md): redundant services, Docker Swarm, what is and is not covered
 - [Troubleshooting](troubleshooting.md): what an error or symptom means and what to do
 - [API reference](api.md) and [command line reference](cli.md)
 

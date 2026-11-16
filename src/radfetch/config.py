@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     # --- API -----------------------------------------------------------------
     # When set, every endpoint except /healthz requires "Authorization: Bearer <token>".
     api_token: str | None = None
+    # How long a sign-in in the web UI lasts.
+    session_hours: float = 12
 
     # --- Notifications --------------------------------------------------------
     # POST a JSON message here when a one-off or pushed job fails, a batch finishes, or the

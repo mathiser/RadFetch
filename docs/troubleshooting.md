@@ -50,9 +50,9 @@ to keep those of failed jobs longer.
 
 | Check | Likely cause |
 |---|---|
-| Header shows "batch window closed" | Batch jobs wait for the window (`RADFETCH_BATCH_WINDOWS`, local time, `TZ`) |
-| Header shows "PACS breaker open" | The PACS is not answering; see below |
-| Header shows "gateway silent" or "no heartbeat yet" | The gateway is not running: `docker compose ps gateway`, then its log |
+| The Dashboard's PACS tile says "batch window closed" | Batch jobs wait for the window (`RADFETCH_BATCH_WINDOWS`, local time, `TZ`) |
+| The PACS tile says "not answering" | The PACS is not answering; see below |
+| The PACS tile says "gateway silent" or "unknown" | The gateway is not running: `docker compose ps gateway`, then its log |
 | The batch shows "(paused)" | Resume it |
 | Many jobs are `retrieving` | Normal: batch jobs are looked up only `RADFETCH_MAX_RESOLVED_AHEAD` ahead |
 
@@ -112,10 +112,15 @@ an hour. Restarting the gateway makes it try at once.
 | `scp` log shows "0 job(s)" for the study | No flow has a `trigger` matching the sender whose `select` rules match the series |
 | A second job appears with a few instances | Instances arrived after the quiet period; raise `RADFETCH_SCP_STABLE_S` |
 
-### The UI keeps asking for a token
+### Cannot sign in
 
-The token is wrong or revoked. Tokens are kept only for the browser tab; closing
-it forgets the token. Create a new one if it is lost.
+| Message or symptom | Cause |
+|---|---|
+| "wrong username or password, or the account is locked or disabled" | One of those three; the message does not say which on purpose. After ten wrong passwords an account is locked for 15 minutes. An administrator can reset the password, which also lifts the lock |
+| Signed out unexpectedly | Sessions last `RADFETCH_SESSION_HOURS`; a password change or disabling the account signs out at once |
+| No administrator can sign in | On the host: `docker compose exec api radfetch user passwd <name>` |
+| "you lack the permission …" | The account's role or individual settings do not allow the action; see [Users and permissions](users.md) |
+| A job someone else can see is "not found" | The account is limited to other flows |
 
 ### The disk fills up
 

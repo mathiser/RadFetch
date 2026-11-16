@@ -161,12 +161,22 @@ def get_job(conn: Conn, job_id: uuid.UUID) -> Row | None:
     return conn.execute("select * from jobs where id = %s", (job_id,)).fetchone()
 
 
-def list_jobs(conn: Conn, state: str | None = None, batch_id: uuid.UUID | None = None, limit: int = 100) -> list[Row]:
+def list_jobs(
+    conn: Conn,
+    state: str | None = None,
+    batch_id: uuid.UUID | None = None,
+    limit: int = 100,
+    flows: list[str] | None = None,
+    search: str | None = None,
+) -> list[Row]:
+    """Newest first. `flows` limits the result to those flows; `search` matches the accession number's start."""
     return conn.execute(
         "select * from jobs where (%(state)s::text is null or state = %(state)s)"
         " and (%(batch)s::uuid is null or batch_id = %(batch)s)"
-        " order by created_at desc limit %(limit)s",
-        {"state": state, "batch": batch_id, "limit": limit},
+        " and (%(flows)s::text[] is null or flow = any(%(flows)s))"
+        " and (%(search)s::text is null or accession_number ilike %(search)s || '%%')"
+        " order by created_at desc, accession_number limit %(limit)s",
+        {"state": state, "batch": batch_id, "limit": limit, "flows": flows, "search": search},
     ).fetchall()
 
 
@@ -181,8 +191,12 @@ def get_batch(conn: Conn, batch_id: uuid.UUID) -> Row | None:
     return batch
 
 
-def list_batches(conn: Conn, limit: int = 50) -> list[Row]:
-    batches = conn.execute("select * from batches order by created_at desc limit %s", (limit,)).fetchall()
+def list_batches(conn: Conn, limit: int = 50, flows: list[str] | None = None) -> list[Row]:
+    batches = conn.execute(
+        "select * from batches where (%(flows)s::text[] is null or flow = any(%(flows)s))"
+        " order by created_at desc limit %(limit)s",
+        {"flows": flows, "limit": limit},
+    ).fetchall()
     counts = conn.execute(
         "select batch_id, state, count(*) as n from jobs where batch_id = any(%s) group by batch_id, state",
         ([b["id"] for b in batches],),
@@ -200,9 +214,63 @@ def count_jobs(conn: Conn, state: str) -> int:
     return conn.execute("select count(*) as n from jobs where state = %s", (state,)).fetchone()["n"]
 
 
-def state_counts(conn: Conn) -> dict[str, int]:
-    rows = conn.execute("select state, count(*) as n from jobs group by state").fetchall()
+def state_counts(conn: Conn, flows: list[str] | None = None) -> dict[str, int]:
+    rows = conn.execute(
+        "select state, count(*) as n from jobs where (%(f)s::text[] is null or flow = any(%(f)s)) group by state",
+        {"f": flows},
+    ).fetchall()
     return {row["state"]: row["n"] for row in rows}
+
+
+def stats_overview(conn: Conn, hours: int, flows: list[str] | None = None) -> dict[str, Any]:
+    """Numbers behind the dashboard for the last `hours` hours."""
+    p = {"h": hours, "f": flows}
+    scope = "(%(f)s::text[] is null or j.flow = any(%(f)s))"
+    window = "now() - make_interval(hours => %(h)s)"
+    finished = conn.execute(
+        f"select date_trunc('hour', e.at) as hour, e.kind, count(*) as n from events e join jobs j on j.id = e.job_id"
+        f" where e.kind in ('done','failed') and e.at > {window} and {scope} group by 1, 2 order by 1",
+        p,
+    ).fetchall()
+    fetched = conn.execute(
+        f"select date_trunc('hour', staged_at) as hour, sum(received_instances)::bigint as instances,"
+        f" count(*) as series from retrievals where staged_at > {window} group by 1 order by 1",
+        p,
+    ).fetchall()
+    per_flow = conn.execute(
+        f"""
+        select j.flow,
+               count(*) filter (where j.state = 'done') as done,
+               count(*) filter (where j.state = 'failed') as failed,
+               count(*) filter (where j.state not in ('done','failed','cancelled')) as active,
+               percentile_cont(0.5) within group (order by extract(epoch from j.updated_at - j.created_at))
+                   filter (where j.state = 'done') as median_job_s,
+               (select percentile_cont(0.5) within group (order by extract(epoch from r.finished_at - r.started_at))
+                  from runs r join jobs j2 on j2.id = r.job_id
+                 where j2.flow = j.flow and r.state = 'succeeded' and r.finished_at > {window}) as median_run_s
+        from jobs j where j.updated_at > {window} and {scope} group by j.flow order by j.flow
+        """,
+        p,
+    ).fetchall()
+    waiting = conn.execute(
+        f"select coalesce(extract(epoch from now() - min(j.created_at)), 0)::float as oldest_s from jobs j"
+        f" where j.state in ('queued','retrieving','ready') and {scope}",
+        p,
+    ).fetchone()
+    cache = conn.execute(
+        "select coalesce(sum(bytes), 0)::bigint as bytes, count(*) as series from retrievals where state = 'staged'"
+    ).fetchone()
+    return {
+        "hours": hours,
+        "now": conn.execute("select now() as now").fetchone()["now"],
+        "jobs": state_counts(conn, flows),
+        "finished_per_hour": finished,
+        "fetched_per_hour": fetched,
+        "flows": per_flow,
+        "oldest_waiting_s": waiting["oldest_s"],
+        "cache": cache,
+        "status": get_status(conn),
+    }
 
 
 # --- gateway: resolve -------------------------------------------------------------
@@ -836,46 +904,200 @@ def metrics(conn: Conn) -> dict[str, Any]:
     }
 
 
-# --- API tokens -----------------------------------------------------------------------------
+# --- users, sessions and API tokens -------------------------------------------------------------
 
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_token(conn: Conn, name: str, role: str) -> str:
-    """Create a named token and return it. This is the only time the token itself is available."""
-    token = "rf_" + secrets.token_urlsafe(32)
+_USER_COLUMNS = "id, username, role, grants, denies, allowed_flows, disabled, created_at, last_login_at"
+
+
+def create_user(
+    conn: Conn,
+    username: str,
+    role: str,
+    password_hash: str | None = None,
+    grants: list[str] | None = None,
+    denies: list[str] | None = None,
+    allowed_flows: list[str] | None = None,
+    by: str | None = None,
+) -> Row:
+    with conn.transaction():
+        user = conn.execute(
+            "insert into users (id, username, role, password_hash, grants, denies, allowed_flows)"
+            f" values (%s, %s, %s, %s, %s, %s, %s) returning {_USER_COLUMNS}",
+            (uuid.uuid4(), username, role, password_hash, grants or [], denies or [], allowed_flows),
+        ).fetchone()
+        log_event(conn, None, "user_created", username=username, role=role, by=by)
+    return user
+
+
+def get_user(conn: Conn, username: str) -> Row | None:
+    return conn.execute(f"select {_USER_COLUMNS} from users where username = %s", (username,)).fetchone()
+
+
+def list_users(conn: Conn) -> list[Row]:
+    return conn.execute(
+        f"select {_USER_COLUMNS}, password_hash is not null as has_password,"
+        " (select count(*) from api_tokens t where t.user_id = users.id and t.revoked_at is null) as tokens"
+        " from users order by username"
+    ).fetchall()
+
+
+def users_exist(conn: Conn) -> bool:
+    return conn.execute("select 1 from users limit 1").fetchone() is not None
+
+
+def update_user(conn: Conn, username: str, changes: dict[str, Any], by: str | None = None) -> Row | None:
+    """Change role, grants, denies, allowed_flows, disabled or password_hash.
+
+    Refuses (ValueError) to leave the system without an enabled admin.
+    """
+    allowed = {"role", "grants", "denies", "allowed_flows", "disabled", "password_hash"}
+    changes = {k: v for k, v in changes.items() if k in allowed}
+    with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(727002)")  # serialise the last-admin check
+        current = conn.execute("select * from users where username = %s for update", (username,)).fetchone()
+        if current is None:
+            return None
+        if changes:
+            sets = ", ".join(f"{k} = %({k})s" for k in changes)
+            conn.execute(f"update users set {sets} where username = %(username)s", {**changes, "username": username})
+        _require_an_admin(conn)
+        if changes.get("disabled") or "password_hash" in changes:
+            conn.execute("delete from sessions where user_id = %s", (current["id"],))  # sign them out everywhere
+        logged = {k: v for k, v in changes.items() if k != "password_hash"}
+        if "password_hash" in changes:
+            logged["password"] = "changed"
+        log_event(conn, None, "user_changed", username=username, changes=logged, by=by)
+    return get_user(conn, username)
+
+
+def delete_user(conn: Conn, username: str, by: str | None = None) -> bool:
+    with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(727002)")
+        cur = conn.execute("delete from users where username = %s", (username,))
+        if cur.rowcount == 0:
+            return False
+        _require_an_admin(conn)
+        log_event(conn, None, "user_deleted", username=username, by=by)
+    return True
+
+
+def _require_an_admin(conn: Conn) -> None:
+    """Once accounts exist there must always be an enabled admin who can sign in, or nobody could manage users."""
+    if not users_exist(conn):
+        return
+    ok = conn.execute(
+        "select 1 from users u where not disabled and role = 'admin' and not ('users.manage' = any(denies))"
+        " and (password_hash is not null or exists"
+        "      (select 1 from api_tokens t where t.user_id = u.id and t.revoked_at is null)) limit 1"
+    ).fetchone()
+    if ok is None:
+        raise ValueError("this would leave no enabled administrator")
+
+
+def check_login(conn: Conn, username: str, verify, max_failures: int = 10, lock_minutes: int = 15) -> Row | None:
+    """Return the user when verify(password_hash) is true. Locks the account after repeated failures."""
+    with conn.transaction():
+        row = conn.execute("select * from users where username = %s for update", (username,)).fetchone()
+        if row is None:
+            verify(None)  # spend the same time as for a real user
+            return None
+        locked = conn.execute("select %s > now() as locked", (row["locked_until"],)).fetchone()["locked"]
+        if row["disabled"] or locked or not verify(row["password_hash"]):
+            if not row["disabled"] and not locked:
+                conn.execute(
+                    "update users set failed_logins = failed_logins + 1,"
+                    " locked_until = case when failed_logins + 1 >= %s then now() + make_interval(mins => %s) end"
+                    " where id = %s",
+                    (max_failures, lock_minutes, row["id"]),
+                )
+            return None
+        conn.execute(
+            "update users set failed_logins = 0, locked_until = null, last_login_at = now() where id = %s",
+            (row["id"],),
+        )
+    return get_user(conn, username)
+
+
+def create_session(conn: Conn, user_id: uuid.UUID, hours: float) -> str:
+    token = secrets.token_urlsafe(32)
+    conn.execute("delete from sessions where expires_at < now()")
     conn.execute(
-        "insert into api_tokens (id, name, role, token_hash) values (%s, %s, %s, %s)",
-        (uuid.uuid4(), name, role, _token_hash(token)),
+        "insert into sessions (token_hash, user_id, expires_at) values (%s, %s, now() + make_interval(secs => %s * 3600.0))",
+        (_token_hash(token), user_id, hours),
     )
-    log_event(conn, None, "token_created", name=name, role=role)
     return token
 
 
-def find_token(conn: Conn, token: str) -> Row | None:
+def user_for_session(conn: Conn, token: str) -> Row | None:
     return conn.execute(
-        "select name, role from api_tokens where token_hash = %s and revoked_at is null", (_token_hash(token),)
+        f"select {', '.join('u.' + c.strip() for c in _USER_COLUMNS.split(','))} from sessions s"
+        " join users u on u.id = s.user_id where s.token_hash = %s and s.expires_at > now() and not u.disabled",
+        (_token_hash(token),),
     ).fetchone()
 
 
-def tokens_exist(conn: Conn) -> bool:
-    return conn.execute("select 1 from api_tokens where revoked_at is null limit 1").fetchone() is not None
+def delete_session(conn: Conn, token: str) -> None:
+    conn.execute("delete from sessions where token_hash = %s", (_token_hash(token),))
 
 
-def list_tokens(conn: Conn) -> list[Row]:
-    return conn.execute("select name, role, created_at, revoked_at from api_tokens order by created_at").fetchall()
+def create_token(conn: Conn, username: str, name: str | None = None, by: str | None = None) -> str:
+    """Create an API token for a user and return it. This is the only time the token itself is available."""
+    with conn.transaction():
+        user = get_user(conn, username)
+        if user is None:
+            raise ValueError(f"no such user: {username}")
+        token = "rf_" + secrets.token_urlsafe(32)
+        name = name or f"{username}-{secrets.token_hex(3)}"
+        conn.execute(
+            "insert into api_tokens (id, name, user_id, token_hash) values (%s, %s, %s, %s)",
+            (uuid.uuid4(), name, user["id"], _token_hash(token)),
+        )
+        log_event(conn, None, "token_created", name=name, username=username, by=by)
+    return token
 
 
-def revoke_token(conn: Conn, name: str) -> bool:
+def user_for_token(conn: Conn, token: str) -> Row | None:
+    return conn.execute(
+        f"select {', '.join('u.' + c.strip() for c in _USER_COLUMNS.split(','))} from api_tokens t"
+        " join users u on u.id = t.user_id where t.token_hash = %s and t.revoked_at is null and not u.disabled",
+        (_token_hash(token),),
+    ).fetchone()
+
+
+def list_tokens(conn: Conn, username: str | None = None) -> list[Row]:
+    return conn.execute(
+        "select t.name, u.username, t.created_at, t.revoked_at from api_tokens t join users u on u.id = t.user_id"
+        " where %(u)s::text is null or u.username = %(u)s order by t.created_at",
+        {"u": username},
+    ).fetchall()
+
+
+def revoke_token(conn: Conn, name: str, username: str | None = None, by: str | None = None) -> bool:
+    """Revoke a token by name; with username, only if it belongs to that user."""
     with conn.transaction():
         cur = conn.execute(
-            "update api_tokens set revoked_at = now() where name = %s and revoked_at is null", (name,)
+            "update api_tokens t set revoked_at = now() from users u where u.id = t.user_id and t.name = %(n)s"
+            " and t.revoked_at is null and (%(u)s::text is null or u.username = %(u)s)",
+            {"n": name, "u": username},
         )
         if cur.rowcount:
-            log_event(conn, None, "token_revoked", name=name)
+            log_event(conn, None, "token_revoked", name=name, by=by)
         return cur.rowcount == 1
+
+
+def audit_log(conn: Conn, limit: int = 200, flows: list[str] | None = None) -> list[Row]:
+    """Latest events, newest first. With `flows`, job events of other flows are left out."""
+    return conn.execute(
+        "select e.id, e.at, e.job_id, e.kind, e.detail from events e left join jobs j on j.id = e.job_id"
+        " where %(f)s::text[] is null or e.job_id is null or j.flow = any(%(f)s)"
+        " order by e.id desc limit %(limit)s",
+        {"f": flows, "limit": limit},
+    ).fetchall()
 
 
 # --- notifications ---------------------------------------------------------------------------
@@ -915,3 +1137,18 @@ def retry_notification(conn: Conn, notification_id: int, error: str, delay_s: fl
         " not_before = now() + make_interval(secs => %s) where id = %s",
         (error, delay_s, notification_id),
     )
+
+
+# --- leadership ------------------------------------------------------------------------------
+
+LEADER_KEYS = {"gateway": 727101, "ingress": 727102}
+
+
+def try_lead(conn: Conn, role: str) -> bool:
+    """Become the single active instance of a role, or learn that another one is.
+
+    A Postgres session-level advisory lock: it is held for as long as this connection
+    lives and is released by the database the moment the connection ends, so a standby
+    takes over without any timeout to tune. Calling it again while leading returns True.
+    """
+    return conn.execute("select pg_try_advisory_lock(%s) as ok", (LEADER_KEYS[role],)).fetchone()["ok"]

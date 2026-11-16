@@ -6,237 +6,516 @@
 <title>RadFetch</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #fff; --text: #1c2430; --muted: #627084; --line: #dfe3e9;
-    --accent: #1f6feb; --ok: #1a7f4b; --warn: #b26a00; --bad: #c0362c; --chip: #eef1f5;
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --line: #e1e0d9; --axis: #c3c2b7; --chip: #efeee9; --accent: #2a78d6; --accent-ink: #1f5fae;
+    --done: #2a78d6; --failed: #e34948; --fetched: #1baf7a;
+    --good: #0ca30c; --warn: #b26a00; --bad: #d03b3b;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #12161c; --panel: #1a2029; --text: #e4e9f0; --muted: #94a1b3; --line: #2c3542;
-            --accent: #5b9dff; --ok: #4cc38a; --warn: #e0a341; --bad: #f0776c; --chip: #252d39; }
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+      --line: #2c2c2a; --axis: #383835; --chip: #262624; --accent: #3987e5; --accent-ink: #7fb1f0;
+      --done: #3987e5; --failed: #e66767; --fetched: #199e70;
+      --good: #0ca30c; --warn: #fab219; --bad: #e66767;
+    }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
-  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; padding: 12px 20px;
-           background: var(--panel); border-bottom: 1px solid var(--line); }
-  h1 { font-size: 17px; margin: 0; }
-  h2 { font-size: 13px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-  main { display: grid; grid-template-columns: minmax(260px, 320px) 1fr; gap: 16px; padding: 16px 20px; align-items: start; }
-  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip { background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
-  .chip b { font-variant-numeric: tabular-nums; }
-  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .muted { color: var(--muted); }
-  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  [hidden] { display: none !important; }
+  header { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; padding: 10px 20px;
+           background: var(--surface); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 17px; margin: 0 8px 0 0; }
+  h2 { font-size: 12px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 600; }
+  nav { display: flex; flex-wrap: wrap; gap: 2px; }
+  nav a { padding: 5px 11px; border-radius: 6px; color: var(--text-2); text-decoration: none; }
+  nav a.on { background: var(--chip); color: var(--text); font-weight: 600; }
+  #who { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--text-2); font-size: 13px; }
+  main { padding: 16px 20px; max-width: 1280px; margin: 0 auto; }
+  section, .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .grid2 { margin-bottom: 16px; }
+  .grid2 > section { margin: 0; min-width: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .tile .k { font-size: 12px; color: var(--text-2); }
+  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; }
+  .tile .s { font-size: 12px; color: var(--muted); min-height: 17px; }
+  .ok { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  label { display: block; font-size: 12px; color: var(--text-2); margin: 8px 0 3px; }
   input, select, textarea, button { font: inherit; color: inherit; }
-  input, select, textarea { width: 100%; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-  textarea { min-height: 90px; resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
+  input, select, textarea { width: 100%; padding: 6px 8px; background: var(--page); border: 1px solid var(--line); border-radius: 6px; }
+  input[type=checkbox] { width: auto; }
+  textarea { min-height: 110px; resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
   button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; margin-top: 10px; }
   button.small { padding: 2px 8px; font-size: 12px; }
+  button.danger { color: var(--bad); }
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; }
-  tbody tr.job { cursor: pointer; } tbody tr.job:hover { background: var(--chip); }
-  td.err { white-space: normal; max-width: 320px; color: var(--bad); }
-  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
-  .bar select { width: auto; }
-  #msg { min-height: 18px; font-size: 12px; margin-top: 8px; }
-  #detail pre { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
-  body.viewer form, body.viewer td button:not(.csv) { display: none; }
+  th { color: var(--text-2); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr.pick { cursor: pointer; } tbody tr.pick:hover { background: var(--chip); }
+  td.wrap { white-space: normal; max-width: 340px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .bar select, .bar input { width: auto; }
+  .bar h2 { margin: 0; }
   .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  pre { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  #toast { position: fixed; right: 16px; bottom: 16px; max-width: 420px; padding: 10px 14px; border-radius: 8px;
+           background: var(--surface); border: 1px solid var(--line); box-shadow: 0 4px 18px rgba(0,0,0,.18); }
+  .progress { display: flex; height: 8px; width: 140px; border-radius: 4px; overflow: hidden; background: var(--chip); gap: 2px; }
+  .progress i { display: block; height: 100%; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin: -4px 0 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  svg.chart { width: 100%; height: 190px; display: block; }
+  svg.chart text { font-size: 11px; fill: var(--muted); }
+  svg.chart .grid { stroke: var(--line); stroke-width: 1; }
+  svg.chart .base { stroke: var(--axis); stroke-width: 1; }
+  svg.chart .hit { fill: transparent; }
+  svg.chart .hit:hover { fill: var(--chip); opacity: .6; }
+  .chartwrap { position: relative; }
+  .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+         padding: 6px 9px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); white-space: nowrap; z-index: 2; }
+  .tip b { font-variant-numeric: tabular-nums; }
+  details.data { margin-top: 6px; font-size: 12px; color: var(--text-2); }
+  details.data table { font-size: 12px; margin-top: 6px; }
+  .perm { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; font-size: 13px; }
+  .perm small { color: var(--muted); display: block; }
+  .perm select { width: auto; padding: 2px 6px; }
+  .pill { display: inline-block; background: var(--chip); border-radius: 999px; padding: 1px 8px; font-size: 12px; margin: 1px 4px 1px 0; white-space: nowrap; }
+  #login { max-width: 360px; margin: 9vh auto; }
+  .secret { background: var(--chip); border-radius: 6px; padding: 8px 10px; margin-top: 10px; font-size: 13px; word-break: break-all; }
 </style>
 </head>
 <body>
-<header>
+<header id="top" hidden>
   <h1>RadFetch</h1>
-  <div class="chips" id="counts"></div>
-  <div class="chips" id="gateway"></div>
-  <div class="chips" id="who" style="margin-left:auto"></div>
+  <nav id="nav"></nav>
+  <div id="who"></div>
 </header>
-<main>
-  <div>
-    <section>
-      <h2>One-off job</h2>
-      <form id="job-form">
-        <label for="acc">Accession number</label><input id="acc" required autocomplete="off">
-        <label for="job-flow">Flow</label><select id="job-flow" class="flows"></select>
-        <button class="primary">Run now</button>
-      </form>
-    </section>
-    <section>
-      <h2>Batch</h2>
-      <form id="batch-form">
-        <label for="batch-name">Name</label><input id="batch-name" required autocomplete="off">
-        <label for="batch-flow">Flow</label><select id="batch-flow" class="flows"></select>
-        <label for="batch-acc">Accession numbers, one per line</label><textarea id="batch-acc" required></textarea>
-        <button class="primary">Queue batch</button>
-      </form>
-      <div id="msg"></div>
-    </section>
-  </div>
-  <div>
-    <section>
-      <h2>Batches</h2>
-      <div class="scroll"><table><thead><tr><th>Name</th><th>Flow</th><th>Progress</th><th>Created</th><th></th></tr></thead>
-      <tbody id="batches"></tbody></table></div>
-    </section>
-    <section>
-      <div class="bar"><h2 style="margin:0">Jobs</h2>
-        <select id="state-filter"><option value="">all states</option></select>
-        <span class="muted" id="updated"></span></div>
-      <div class="scroll"><table><thead><tr><th>Accession</th><th>Flow</th><th>State</th><th>Source</th><th>Updated</th><th>Error</th><th></th></tr></thead>
-      <tbody id="jobs"></tbody></table></div>
-    </section>
-    <section id="detail" hidden><h2>Job history</h2><pre id="detail-body"></pre></section>
-  </div>
-</main>
+<main id="main"></main>
+<div id="toast" hidden></div>
 <script>
+"use strict";
 const STATES = ["queued", "retrieving", "ready", "running", "sending", "done", "failed", "cancelled"];
+const TERMINAL = ["done", "failed", "cancelled"];
 const TONE = { done: "ok", failed: "bad", cancelled: "muted", running: "warn" };
-const $ = (id) => document.getElementById(id);
-let selectedJob = null;
+let me = null, timer = null, roleInfo = null;
+const view = { job: null, user: null, hours: 24, state: "", search: "" };
 
+// ---- helpers ------------------------------------------------------------------------
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
-  node.append(...children);
+  node.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
   return node;
 }
+const svgEl = (tag, attrs = {}, ...children) => {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  node.append(...children);
+  return node;
+};
+const $ = (id) => document.getElementById(id);
+const can = (p) => me && me.permissions.includes(p);
+const when = (iso) => iso ? new Date(iso).toLocaleString([], { dateStyle: "short", timeStyle: "medium" }) : "";
+const num = (n) => Number(n).toLocaleString();
+function duration(s) {
+  if (s === null || s === undefined) return "";
+  s = Math.round(s);
+  if (s < 90) return s + " s";
+  if (s < 5400) return Math.round(s / 60) + " min";
+  if (s < 172800) return (s / 3600).toFixed(1) + " h";
+  return (s / 86400).toFixed(1) + " d";
+}
+function bytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + units[i];
+}
+function token() { try { return sessionStorage.getItem("radfetch-token"); } catch { return null; } }
+function setToken(t) { try { t ? sessionStorage.setItem("radfetch-token", t) : sessionStorage.removeItem("radfetch-token"); } catch {} }
 
 async function api(path, options = {}) {
-  let token = null;
-  try { token = sessionStorage.getItem("radfetch-token"); } catch {}
-  const headers = { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) };
+  const headers = { ...(options.body ? { "content-type": "application/json" } : {}), ...(token() ? { authorization: "Bearer " + token() } : {}) };
   const response = await fetch(path, { ...options, headers });
-  if (response.status === 401) {
-    const entered = prompt("API token");
-    if (!entered) throw new Error("not authorized");
-    try { sessionStorage.setItem("radfetch-token", entered); } catch {}
-    return api(path, options);
-  }
+  if (response.status === 401 && path !== "/auth/login") { showLogin(); throw new Error("Please sign in."); }
   if (!response.ok) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch {}
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new Error(typeof detail === "string" ? detail : "The request was not valid.");
   }
-  return response.json();
+  return options.raw ? response : response.json();
+}
+const send = (method, path, body) => api(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+const post = (path, body) => send("POST", path, body);
+
+function toast(text, tone = "ok") {
+  const t = $("toast");
+  t.className = tone; t.textContent = text; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 6000);
+}
+async function act(fn, done) {
+  try { await fn(); if (done) toast(done); await render(); } catch (e) { toast(e.message, "bad"); }
 }
 
-const post = (path, body) => api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-const when = (iso) => new Date(iso).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+// ---- sign-in and shell ------------------------------------------------------------------
+function showLogin() {
+  clearInterval(timer); me = null; $("top").hidden = true;
+  const user = el("input", { id: "login-user", autocomplete: "username", required: true });
+  const pass = el("input", { id: "login-pass", type: "password", autocomplete: "current-password", required: true });
+  const tok = el("input", { id: "login-token", type: "password", autocomplete: "off" });
+  const form = el("form", { id: "login-form" },
+    el("label", { htmlFor: "login-user" }, "Username"), user,
+    el("label", { htmlFor: "login-pass" }, "Password"), pass,
+    el("button", { className: "primary" }, "Sign in"));
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    try { setToken(null); await post("/auth/login", { username: user.value, password: pass.value }); await start(); }
+    catch (err) { toast(err.message, "bad"); }
+  };
+  const tform = el("form", {}, el("label", { htmlFor: "login-token" }, "API token"), tok, el("button", { className: "primary" }, "Use token"));
+  tform.onsubmit = async (e) => { e.preventDefault(); setToken(tok.value.trim()); try { await start(); } catch (err) { setToken(null); toast("That token was not accepted.", "bad"); } };
+  $("main").replaceChildren(el("div", { id: "login" },
+    el("section", {}, el("h2", {}, "Sign in to RadFetch"), form),
+    el("details", { className: "data" }, el("summary", {}, "Sign in with an API token instead"), el("section", {}, tform))));
+}
+
+const TABS = [
+  ["dashboard", "Dashboard", "stats.view"], ["jobs", "Jobs", "jobs.view"], ["batches", "Batches", "jobs.view"],
+  ["submit", "Submit", null], ["users", "Users", "users.manage"], ["audit", "Audit log", "audit.view"], ["account", "Account", null],
+];
+function tabs() {
+  return TABS.filter(([id, , perm]) => {
+    if (id === "submit") return can("jobs.submit") || can("batches.submit");
+    if (id === "account") return me.auth_enabled && me.name && me.name !== "shared-token";
+    return can(perm);
+  });
+}
+function current() {
+  const wanted = location.hash.replace("#", "");
+  const allowed = tabs().map((t) => t[0]);
+  return allowed.includes(wanted) ? wanted : allowed[0];
+}
+async function start() {
+  me = await api("/whoami");
+  $("top").hidden = false;
+  $("who").replaceChildren(
+    el("span", {}, me.name ? `${me.name} (${me.role})` : "open access"),
+    me.auth_enabled ? el("button", { className: "small", onclick: signOut }, "Sign out") : "");
+  if (!me.auth_enabled) $("who").prepend(el("span", { className: "pill warn", title: "Create an admin with: radfetch user create <name> --role admin" }, "no accounts yet: anyone can use this"));
+  clearInterval(timer);
+  timer = setInterval(() => { if (["dashboard", "jobs", "batches"].includes(current())) render(true).catch(() => {}); }, 5000);
+  await render();
+}
+async function signOut() {
+  try { await post("/auth/logout"); } catch {}
+  setToken(null);
+  history.replaceState(null, "", location.pathname);  // the next person starts on their own first page
+  Object.assign(view, { job: null, user: null, state: "", search: "" });
+  showLogin();
+}
+window.onhashchange = () => render().catch((e) => toast(e.message, "bad"));
+
+async function render(refreshOnly = false) {
+  if (!me) return;
+  const tab = current();
+  $("nav").replaceChildren(...tabs().map(([id, label]) => el("a", { href: "#" + id, className: id === tab ? "on" : "" }, label)));
+  // Do not rebuild forms a person may be typing in when this is only the periodic refresh.
+  if (refreshOnly && document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  const content = await VIEWS[tab]();
+  $("main").replaceChildren(...content);
+}
+
+// ---- charts --------------------------------------------------------------------------------
+function niceMax(v) {
+  // four equal steps of a round size, so every tick is a whole, clean number
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(1, v / 4))));
+  for (const m of [1, 2, 5, 10]) if (4 * m * p >= v) return 4 * m * p;
+  return 40 * p;
+}
+// buckets: [{label, long, values: [..]}], series: [{name, color}]
+function columnChart(buckets, series, unit) {
+  const W = 720, H = 190, L = 44, R = 8, T = 10, B = 24, plotW = W - L - R, plotH = H - T - B;
+  const totals = buckets.map((b) => b.values.reduce((a, v) => a + v, 0));
+  const max = niceMax(Math.max(1, ...totals));
+  const svg = svgEl("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${series.map((s) => s.name).join(" and ")} ${unit}` });
+  for (let i = 0; i <= 4; i++) {
+    const y = T + plotH - (plotH * i) / 4;
+    svg.append(svgEl("line", { class: i ? "grid" : "base", x1: L, x2: W - R, y1: y, y2: y }));
+    const t = svgEl("text", { x: L - 6, y: y + 4, "text-anchor": "end" }); t.textContent = num((max * i) / 4); svg.append(t);
+  }
+  const band = plotW / buckets.length, bw = Math.max(2, Math.min(24, band - 2));
+  const every = Math.ceil(buckets.length / 8);
+  const wrap = el("div", { className: "chartwrap" });
+  const tip = el("div", { className: "tip", hidden: true });
+  buckets.forEach((b, i) => {
+    const x = L + band * i + (band - bw) / 2;
+    let y = T + plotH;
+    b.values.forEach((v, k) => {
+      if (!v) return;
+      const h = Math.max(2, (plotH * v) / max), top = y - h, last = b.values.slice(k + 1).every((n) => !n);
+      const r = last ? Math.min(4, bw / 2, h) : 0;
+      // rounded only at the data end; a 2px surface gap separates stacked segments
+      const d = `M${x},${y} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${y} Z`;
+      svg.append(svgEl("path", { d, fill: series[k].color }));
+      y = top - 2;
+    });
+    if (i % every === 0) { const t = svgEl("text", { x: L + band * i + band / 2, y: H - 7, "text-anchor": "middle" }); t.textContent = b.label; svg.append(t); }
+    const hit = svgEl("rect", { class: "hit", x: L + band * i, y: T, width: band, height: plotH });
+    hit.addEventListener("mousemove", (e) => {
+      tip.replaceChildren(el("div", { className: "muted" }, b.long),
+        ...series.map((s, k) => el("div", {}, el("i", { style: `display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;background:${s.color}` }), `${s.name}: `, el("b", {}, num(b.values[k])))));
+      tip.hidden = false;
+      const box = wrap.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX - box.left + 12, box.width - tip.offsetWidth - 4) + "px";
+      tip.style.top = Math.max(0, e.clientY - box.top - tip.offsetHeight - 8) + "px";
+    });
+    hit.addEventListener("mouseleave", () => { tip.hidden = true; });
+    svg.append(hit);
+  });
+  wrap.append(svg, tip);
+  const table = el("details", { className: "data" }, el("summary", {}, "Show as table"),
+    el("div", { className: "scroll" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Period"), ...series.map((s) => el("th", { className: "num" }, s.name)))),
+      el("tbody", {}, ...buckets.filter((b) => b.values.some(Boolean)).map((b) => el("tr", {}, el("td", {}, b.long), ...b.values.map((v) => el("td", { className: "num" }, num(v)))))))));
+  const legend = series.length > 1 ? el("div", { className: "legend" }, ...series.map((s) => el("span", {}, el("i", { style: `background:${s.color}` }), s.name))) : "";
+  return [legend, wrap, table];
+}
+function bucketize(rows, hours, now, pick) {
+  // hourly up to two days, daily beyond; missing periods are zero
+  const daily = hours > 48, step = daily ? 86400000 : 3600000, end = new Date(now);
+  if (daily) end.setHours(0, 0, 0, 0); else end.setMinutes(0, 0, 0);
+  const n = daily ? Math.ceil(hours / 24) : hours, buckets = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const t = new Date(end.getTime() - i * step);
+    buckets.push({ t: t.getTime(), values: pick(null),
+      label: daily ? t.toLocaleDateString([], { day: "numeric", month: "short" }) : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      long: daily ? t.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) : t.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) });
+  }
+  for (const row of rows) {
+    const t = new Date(row.hour);
+    if (daily) t.setHours(0, 0, 0, 0);
+    const b = buckets.find((x) => x.t === t.getTime());
+    if (b) pick(row).forEach((v, k) => { b.values[k] += v; });
+  }
+  return buckets;
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---- views -----------------------------------------------------------------------------------
+const VIEWS = {
+  async dashboard() {
+    const s = await api("/stats/overview?hours=" + view.hours);
+    const j = s.jobs, g = s.status.gateway;
+    const active = STATES.filter((x) => !TERMINAL.includes(x)).reduce((a, x) => a + (j[x] || 0), 0);
+    const done = s.finished_per_hour.filter((r) => r.kind === "done").reduce((a, r) => a + r.n, 0);
+    const failed = s.finished_per_hour.filter((r) => r.kind === "failed").reduce((a, r) => a + r.n, 0);
+    const fetched = s.fetched_per_hour.reduce((a, r) => a + Number(r.instances || 0), 0);
+    const tile = (k, v, sub, tone) => el("div", { className: "tile" }, el("div", { className: "k" }, k), el("div", { className: "v " + (tone || "") }, v), el("div", { className: "s" }, sub || ""));
+    const range = el("select", { id: "range", ariaLabel: "Time range" }, ...[[24, "Last 24 hours"], [48, "Last 48 hours"], [168, "Last 7 days"], [720, "Last 30 days"]].map(([h, t]) => el("option", { value: h, selected: h === view.hours }, t)));
+    range.onchange = () => { view.hours = Number(range.value); render(); };
+    const stale = g && g.age_s > 120;
+    const tiles = el("div", { className: "tiles" },
+      tile("Active jobs", num(active), ["queued", "retrieving", "ready", "running", "sending"].filter((x) => j[x]).map((x) => `${j[x]} ${x}`).join(", ") || "nothing waiting"),
+      tile("Finished", num(done + failed), failed ? `${num(failed)} failed (${Math.round((100 * failed) / (done + failed))}%)` : "none failed", ""),
+      tile("Oldest waiting job", s.oldest_waiting_s ? duration(s.oldest_waiting_s) : "none", "queued, retrieving or ready"),
+      tile("PACS", !g ? "unknown" : g.breaker_open ? "not answering" : "reachable", !g ? "no gateway heartbeat yet" : stale ? `gateway silent for ${duration(g.age_s)}` : g.batch_window_open ? "batch window open" : "batch window closed", !g || stale ? "warn" : g.breaker_open ? "bad" : "ok"),
+      tile("Instances fetched", num(fetched), "from the PACS"),
+      tile("Disk used", g && g.disk_used_fraction !== undefined ? Math.round(g.disk_used_fraction * 100) + "%" : "unknown", `cache ${bytes(Number(s.cache.bytes))} in ${num(s.cache.series)} series`, g && g.disk_used_fraction >= 0.8 ? "warn" : ""));
+    const finished = bucketize(s.finished_per_hour, s.hours, s.now, (r) => r ? [r.kind === "done" ? r.n : 0, r.kind === "failed" ? r.n : 0] : [0, 0]);
+    const pulled = bucketize(s.fetched_per_hour, s.hours, s.now, (r) => r ? [Number(r.instances || 0)] : [0]);
+    const per = s.hours > 48 ? "per day" : "per hour";
+    const flows = el("section", {}, el("h2", {}, "By flow"), el("div", { className: "scroll" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Flow"), ...["Active", "Done", "Failed", "Success rate", "Median time per job", "Median run time"].map((t) => el("th", { className: "num" }, t)))),
+      el("tbody", {}, ...(s.flows.length ? s.flows.map((f) => el("tr", {}, el("td", {}, f.flow), el("td", { className: "num" }, num(f.active)), el("td", { className: "num" }, num(f.done)), el("td", { className: "num" }, num(f.failed)),
+        el("td", { className: "num" }, f.done + f.failed ? Math.round((100 * f.done) / (f.done + f.failed)) + "%" : ""), el("td", { className: "num" }, duration(f.median_job_s)), el("td", { className: "num" }, duration(f.median_run_s))))
+        : [el("tr", {}, el("td", { colSpan: 7, className: "muted" }, "No jobs in this period."))])))));
+    return [el("div", { className: "bar" }, range, el("span", { className: "muted" }, "updated " + new Date().toLocaleTimeString())), tiles,
+      el("div", { className: "grid2" },
+        el("section", {}, el("h2", {}, "Jobs finished " + per), ...columnChart(finished, [{ name: "Done", color: css("--done") }, { name: "Failed", color: css("--failed") }], per)),
+        el("section", {}, el("h2", {}, "Instances fetched from the PACS " + per), ...columnChart(pulled, [{ name: "Instances", color: css("--fetched") }], per))),
+      flows];
+  },
+
+  async jobs() {
+    const q = new URLSearchParams({ limit: 200 });
+    if (view.state) q.set("state", view.state);
+    if (view.search && can("identifiers.view")) q.set("search", view.search);
+    const jobs = await api("/jobs?" + q);
+    const filter = el("select", { ariaLabel: "State" }, el("option", { value: "" }, "all states"), ...STATES.map((s) => el("option", { value: s, selected: s === view.state }, s)));
+    filter.onchange = () => { view.state = filter.value; render(); };
+    const search = el("input", { placeholder: "Accession number starts with…", value: view.search, ariaLabel: "Search accession number" });
+    search.onchange = () => { view.search = search.value.trim(); render(); };
+    const mine = (owner) => can("jobs.manage_all") || (can("jobs.manage_own") && owner && owner === me.name);
+    const rows = jobs.map((j) => {
+      const actions = el("td");
+      if (mine(j.requested_by) && !TERMINAL.includes(j.state)) actions.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/cancel`)); } }, "Cancel"));
+      if (mine(j.requested_by) && ["failed", "cancelled"].includes(j.state)) actions.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/retry`)); } }, "Retry"));
+      return el("tr", { className: "pick", onclick: () => { view.job = j.id; render(); } },
+        el("td", { className: "mono" }, j.accession_number ?? "hidden"), el("td", {}, j.flow), el("td", { className: TONE[j.state] || "" }, j.state),
+        el("td", {}, j.source), el("td", {}, j.requested_by || ""), el("td", {}, when(j.updated_at)), el("td", { className: "wrap bad" }, j.error || ""), actions);
+    });
+    const out = [el("section", {}, el("div", { className: "bar" }, el("h2", {}, "Jobs"), filter, can("identifiers.view") ? search : "", el("span", { className: "muted" }, `${jobs.length} shown`)),
+      el("div", { className: "scroll" }, el("table", {}, el("thead", {}, el("tr", {}, ...["Accession", "Flow", "State", "Source", "Submitted by", "Updated", "Error", ""].map((t) => el("th", {}, t)))),
+        el("tbody", { id: "jobs" }, ...(rows.length ? rows : [el("tr", {}, el("td", { colSpan: 8, className: "muted" }, "No jobs."))])))))];
+    if (view.job) {
+      try {
+        const j = await api("/jobs/" + view.job);
+        const lines = [`${j.accession_number ?? "(accession number hidden)"}  ${j.flow}${j.flow_version ? " v" + j.flow_version : ""}  ${j.state}`, `job ${j.id}`];
+        if (j.study_instance_uid) lines.push(`study ${j.study_instance_uid}`);
+        lines.push("");
+        for (const e of j.events) lines.push(`${when(e.at)}  ${e.kind}${Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : ""}`);
+        for (const r of j.runs) { lines.push("", `run ${r.attempt}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`); if (r.image_digest) lines.push(`  image ${r.image_digest}`); }
+        out.push(el("section", { id: "detail" }, el("div", { className: "bar" }, el("h2", {}, "Job history"), el("button", { className: "small", onclick: () => { view.job = null; render(); } }, "Close")), el("pre", { id: "detail-body" }, lines.join("\n"))));
+      } catch { view.job = null; }
+    }
+    return out;
+  },
+
+  async batches() {
+    const batches = await api("/batches");
+    const rows = batches.map((b) => {
+      const total = Object.values(b.jobs).reduce((a, n) => a + n, 0), fin = TERMINAL.reduce((a, s) => a + (b.jobs[s] || 0), 0);
+      const mine = can("jobs.manage_all") || (can("jobs.manage_own") && b.requested_by && b.requested_by === me.name);
+      const seg = (n, color) => n ? el("i", { style: `width:${(100 * n) / total}%;background:${color}` }) : "";
+      const text = `${b.jobs.done || 0} of ${total} done` + (b.jobs.failed ? `, ${b.jobs.failed} failed` : "") + (b.jobs.cancelled ? `, ${b.jobs.cancelled} cancelled` : "") + (b.paused ? " (paused)" : "");
+      const actions = el("td");
+      if (mine && fin < total) actions.append(
+        el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/${b.paused ? "resume" : "pause"}`)) }, b.paused ? "Resume" : "Pause"), " ",
+        el("button", { className: "small danger", onclick: () => confirm(`Cancel batch "${b.name}"?`) && act(() => post(`/batches/${b.id}/cancel`)) }, "Cancel"), " ");
+      if (mine && b.jobs.failed) actions.append(el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/retry-failed`)) }, "Retry failed"), " ");
+      if (can("identifiers.view")) actions.append(el("button", { className: "small", onclick: () => act(() => downloadCsv(b)) }, "CSV"));
+      return el("tr", {}, el("td", {}, b.name), el("td", {}, b.flow), el("td", {}, b.requested_by || ""),
+        el("td", {}, el("div", { className: "progress", title: text }, seg(b.jobs.done, css("--done")), seg(b.jobs.failed, css("--failed")), seg(b.jobs.cancelled, css("--muted")))),
+        el("td", {}, text), el("td", {}, when(b.created_at)), actions);
+    });
+    return [el("section", {}, el("h2", {}, "Batches"), el("div", { className: "scroll" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...["Name", "Flow", "Submitted by", "", "Progress", "Created", ""].map((t) => el("th", {}, t)))),
+      el("tbody", { id: "batches" }, ...(rows.length ? rows : [el("tr", {}, el("td", { colSpan: 7, className: "muted" }, "No batches yet."))])))))];
+  },
+
+  async submit() {
+    const flows = await api("/flows");
+    const options = () => flows.map((f) => el("option", {}, f));
+    const out = [];
+    if (can("jobs.submit")) {
+      const acc = el("input", { id: "acc", required: true, autocomplete: "off" }), flow = el("select", { id: "job-flow" }, ...options());
+      const form = el("form", { id: "job-form" }, el("label", { htmlFor: "acc" }, "Accession number"), acc, el("label", { htmlFor: "job-flow" }, "Flow"), flow, el("button", { className: "primary" }, "Run now"));
+      form.onsubmit = (e) => { e.preventDefault(); act(async () => { await post("/jobs", { accession_number: acc.value, flow: flow.value }); }, "Job submitted. It runs ahead of batch work."); };
+      out.push(el("section", {}, el("h2", {}, "One-off job"), form));
+    }
+    if (can("batches.submit")) {
+      const name = el("input", { id: "batch-name", required: true, autocomplete: "off" }), flow = el("select", { id: "batch-flow" }, ...options()), list = el("textarea", { id: "batch-acc", required: true });
+      const form = el("form", { id: "batch-form" }, el("label", { htmlFor: "batch-name" }, "Name (do not put patient identifiers here)"), name, el("label", { htmlFor: "batch-flow" }, "Flow"), flow,
+        el("label", { htmlFor: "batch-acc" }, "Accession numbers, one per line"), list, el("button", { className: "primary" }, "Queue batch"));
+      form.onsubmit = (e) => { e.preventDefault(); act(async () => {
+        await post("/batches", { name: name.value, flow: flow.value, accession_numbers: list.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) }); location.hash = "#batches"; }, "Batch queued."); };
+      out.push(el("section", {}, el("h2", {}, "Batch"), form));
+    }
+    return [el("div", { className: "grid2" }, ...out)];
+  },
+
+  async users() {
+    roleInfo = roleInfo || await api("/roles");
+    const [users, flows] = await Promise.all([api("/users"), api("/flows")]);
+    const roleSelect = (value, id) => el("select", { id }, ...roleInfo.roles.map((r) => el("option", { value: r.name, selected: r.name === value, title: r.description }, r.name)));
+    const rows = users.map((u) => el("tr", { className: "pick", onclick: () => { view.user = u.username; render(); } },
+      el("td", {}, u.username), el("td", {}, u.role),
+      el("td", { className: "wrap" }, ...u.grants.map((p) => el("span", { className: "pill" }, "+ " + p)), ...u.denies.map((p) => el("span", { className: "pill" }, "− " + p))),
+      el("td", {}, u.allowed_flows ? u.allowed_flows.join(", ") || "none" : "all"),
+      el("td", { className: u.disabled ? "bad" : "" }, u.disabled ? "disabled" : u.has_password ? "password" : "tokens only"),
+      el("td", { className: "num" }, num(u.tokens)), el("td", {}, when(u.last_login_at) || "never")));
+    const nu = el("input", { id: "new-user", required: true, pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}", autocomplete: "off" }), nr = roleSelect("viewer", "new-role");
+    const svc = el("input", { type: "checkbox", id: "new-svc" });
+    const create = el("form", { id: "user-form" }, el("label", { htmlFor: "new-user" }, "Username"), nu, el("label", { htmlFor: "new-role" }, "Role"), nr,
+      el("label", {}, svc, " Service account (no password; used with API tokens only)"), el("button", { className: "primary" }, "Create user"));
+    const secret = el("div", { id: "secret" });
+    create.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const u = await post("/users", { username: nu.value, role: nr.value, service_account: svc.checked });
+        view.user = u.username; await render();
+        if (u.generated_password) $("secret").replaceChildren(el("div", { className: "secret" }, `Password for ${u.username}, shown only now: `, el("b", { className: "mono" }, u.generated_password)));
+      } catch (err) { toast(err.message, "bad"); }
+    };
+    const out = [el("div", { className: "grid2" },
+      el("section", {}, el("h2", {}, "Users"), el("div", { className: "scroll" }, el("table", {},
+        el("thead", {}, el("tr", {}, ...["User", "Role", "Individual changes", "Flows", "Sign-in", "Tokens", "Last sign-in"].map((t) => el("th", {}, t)))), el("tbody", { id: "users" }, ...rows)))),
+      el("section", {}, el("h2", {}, "New user"), create, secret,
+        el("details", { className: "data" }, el("summary", {}, "What the roles may do"), ...roleInfo.roles.map((r) => el("p", {}, el("b", {}, r.name), ": " + r.description)))))];
+    const u = users.find((x) => x.username === view.user);
+    if (u) {
+      const base = new Set(roleInfo.roles.find((r) => r.name === u.role).permissions);
+      const role = roleSelect(u.role, "edit-role");
+      const picks = {};
+      const perms = el("div", { className: "perm" }, ...Object.entries(roleInfo.permissions).flatMap(([p, text]) => {
+        const state = u.grants.includes(p) ? "grant" : u.denies.includes(p) ? "deny" : "role";
+        picks[p] = el("select", { ariaLabel: p }, ...[["role", `as the role (${base.has(p) ? "yes" : "no"})`], ["grant", "always allow"], ["deny", "never allow"]].map(([v, t]) => el("option", { value: v, selected: v === state }, t)));
+        return [el("div", {}, text, el("small", { className: "mono" }, p)), picks[p]];
+      }));
+      const restrict = el("input", { type: "checkbox", id: "restrict", checked: !!u.allowed_flows });
+      const flowBoxes = flows.map((f) => el("label", {}, el("input", { type: "checkbox", value: f, checked: !!u.allowed_flows && u.allowed_flows.includes(f) }), " " + f));
+      const flowWrap = el("div", { hidden: !u.allowed_flows }, ...flowBoxes);
+      restrict.onchange = () => { flowWrap.hidden = !restrict.checked; };
+      const save = el("button", { className: "primary", id: "save-user" }, "Save changes");
+      save.onclick = () => act(async () => {
+        const body = { role: role.value, grants: Object.keys(picks).filter((p) => picks[p].value === "grant"), denies: Object.keys(picks).filter((p) => picks[p].value === "deny") };
+        if (restrict.checked) body.allowed_flows = flowBoxes.map((l) => l.querySelector("input")).filter((i) => i.checked).map((i) => i.value); else body.all_flows = true;
+        await send("PATCH", "/users/" + u.username, body);
+      }, "Saved.");
+      const out2 = el("div", { id: "user-secret" });
+      const show = (label, value) => out2.replaceChildren(el("div", { className: "secret" }, label + ", shown only now: ", el("b", { className: "mono" }, value)));
+      const tools = el("div", { className: "bar", style: "margin-top:14px" },
+        el("button", { className: "small", onclick: async () => { try { const pw = crypto.getRandomValues(new Uint8Array(15)).reduce((s, b) => s + "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 56], ""); await send("PATCH", "/users/" + u.username, { password: pw }); show("New password", pw); } catch (e) { toast(e.message, "bad"); } } }, "Reset password"),
+        el("button", { className: "small", onclick: async () => { try { const t = await post(`/users/${u.username}/tokens`, {}); show("API token", t.token); } catch (e) { toast(e.message, "bad"); } } }, "Create API token"),
+        el("button", { className: "small", onclick: () => act(() => send("PATCH", "/users/" + u.username, { disabled: !u.disabled })) }, u.disabled ? "Enable" : "Disable"),
+        el("button", { className: "small danger", onclick: () => confirm(`Delete user ${u.username}? Their tokens stop working.`) && act(async () => { await send("DELETE", "/users/" + u.username); view.user = null; }) }, "Delete"));
+      out.push(el("section", { id: "user-edit" }, el("div", { className: "bar" }, el("h2", {}, "User " + u.username), el("button", { className: "small", onclick: () => { view.user = null; render(); } }, "Close")),
+        el("div", { className: "grid2" },
+          el("div", {}, el("label", { htmlFor: "edit-role" }, "Role"), role, el("label", {}, restrict, " Limit to certain flows"), flowWrap, save, tools, out2),
+          el("div", {}, el("label", {}, "Individual permissions (changes on top of the role)"), perms))));
+    }
+    return out;
+  },
+
+  async audit() {
+    const events = await api("/audit?limit=300");
+    return [el("section", {}, el("h2", {}, "Audit log (latest 300 events)"), el("div", { className: "scroll" }, el("table", {},
+      el("thead", {}, el("tr", {}, ...["Time", "Event", "By", "Job", "Detail"].map((t) => el("th", {}, t)))),
+      el("tbody", {}, ...events.map((e) => { const { by, ...rest } = e.detail; return el("tr", {}, el("td", {}, when(e.at)), el("td", {}, e.kind), el("td", {}, by || ""),
+        el("td", { className: "mono" }, e.job_id ? e.job_id.slice(0, 8) : ""), el("td", { className: "wrap mono" }, Object.keys(rest).length ? JSON.stringify(rest) : "")); })))))];
+  },
+
+  async account() {
+    const tokens = await api("/me/tokens");
+    const cur = el("input", { type: "password", id: "pw-cur", autocomplete: "current-password", required: true }), nw = el("input", { type: "password", id: "pw-new", autocomplete: "new-password", required: true, minLength: 10 });
+    const pw = el("form", {}, el("label", { htmlFor: "pw-cur" }, "Current password"), cur, el("label", { htmlFor: "pw-new" }, "New password (at least 10 characters)"), nw, el("button", { className: "primary" }, "Change password"));
+    pw.onsubmit = async (e) => { e.preventDefault(); try { await post("/me/password", { current_password: cur.value, new_password: nw.value }); toast("Password changed. Please sign in again."); showLogin(); } catch (err) { toast(err.message, "bad"); } };
+    const secret = el("div", {});
+    const list = el("table", {}, el("thead", {}, el("tr", {}, ...["Token", "Created", ""].map((t) => el("th", {}, t)))),
+      el("tbody", {}, ...tokens.filter((t) => !t.revoked_at).map((t) => el("tr", {}, el("td", {}, t.name), el("td", {}, when(t.created_at)),
+        el("td", {}, el("button", { className: "small danger", onclick: () => act(() => send("DELETE", "/me/tokens/" + t.name), "Token revoked.") }, "Revoke"))))));
+    const make = el("button", { className: "primary", onclick: async () => { try { const t = await post("/me/tokens", {}); await render(); toast("Token created."); $("main").querySelector("#my-secret").replaceChildren(el("div", { className: "secret" }, "Your new API token, shown only now: ", el("b", { className: "mono" }, t.token))); } catch (e) { toast(e.message, "bad"); } } }, "Create API token");
+    secret.id = "my-secret";
+    return [el("div", { className: "grid2" },
+      el("section", {}, el("h2", {}, "Your access"), el("p", {}, `Signed in as ${me.name}, role ${me.role}.`), el("p", { className: "muted" }, me.allowed_flows ? "Limited to flows: " + (me.allowed_flows.join(", ") || "none") : "All flows."),
+        el("div", {}, ...me.permissions.map((p) => el("span", { className: "pill" }, p)))),
+      el("section", {}, el("h2", {}, "Password"), pw),
+      el("section", {}, el("h2", {}, "API tokens"), el("p", { className: "muted" }, "A token acts with your rights, for scripts and other programs."), list, make, secret))];
+  },
+};
 
 async function downloadCsv(b) {
-  // A plain link could not send the token, so fetch it and hand the browser a blob.
-  let token = null;
-  try { token = sessionStorage.getItem("radfetch-token"); } catch {}
-  const r = await fetch(`/batches/${b.id}/jobs.csv`, { headers: token ? { authorization: "Bearer " + token } : {} });
-  if (!r.ok) throw new Error("could not download the CSV");
+  const r = await api(`/batches/${b.id}/jobs.csv`, { raw: true });
   const a = el("a", { href: URL.createObjectURL(await r.blob()), download: `${b.name}.csv` });
-  a.click();
-  URL.revokeObjectURL(a.href);
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
-function say(text, tone = "ok") { $("msg").className = tone; $("msg").textContent = text; }
-
-async function act(fn, done) {
-  try { await fn(); if (done) say(done); await refresh(); } catch (e) { say(e.message, "bad"); }
-}
-
-function renderHealth(h) {
-  $("counts").replaceChildren(...STATES.filter((s) => h.jobs[s]).map((s) =>
-    el("span", { className: "chip " + (TONE[s] || "") }, s + " ", el("b", {}, String(h.jobs[s])))));
-  const g = h.status.gateway, chips = [];
-  if (!g) chips.push(el("span", { className: "chip muted" }, "gateway: no heartbeat yet"));
-  else {
-    const stale = g.age_s > 120;
-    chips.push(el("span", { className: "chip " + (stale ? "bad" : "ok") }, stale ? `gateway silent ${Math.round(g.age_s)}s` : "gateway up"));
-    chips.push(el("span", { className: "chip " + (g.breaker_open ? "bad" : "ok") }, g.breaker_open ? "PACS breaker open" : "PACS reachable"));
-    chips.push(el("span", { className: "chip " + (g.batch_window_open ? "ok" : "warn") }, g.batch_window_open ? "batch window open" : "batch window closed"));
-  }
-  $("gateway").replaceChildren(...chips);
-}
-
-function renderBatches(batches) {
-  $("batches").replaceChildren(...batches.map((b) => {
-    const total = Object.values(b.jobs).reduce((a, n) => a + n, 0);
-    const finished = (b.jobs.done || 0) + (b.jobs.failed || 0) + (b.jobs.cancelled || 0);
-    const progress = `${b.jobs.done || 0}/${total} done` + (b.jobs.failed ? `, ${b.jobs.failed} failed` : "") + (b.paused ? " (paused)" : "");
-    const buttons = el("td");
-    if (finished < total) {
-      buttons.append(
-        el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/${b.paused ? "resume" : "pause"}`)) }, b.paused ? "Resume" : "Pause"), " ",
-        el("button", { className: "small", onclick: () => confirm(`Cancel batch "${b.name}"?`) && act(() => post(`/batches/${b.id}/cancel`)) }, "Cancel"));
-    }
-    buttons.append(" ", el("button", { className: "small csv", onclick: () => act(() => downloadCsv(b)) }, "CSV"));
-    if (b.jobs.failed) {
-      buttons.append(" ", el("button", { className: "small", onclick: () => act(() => post(`/batches/${b.id}/retry-failed`)) }, "Retry failed"));
-    }
-    return el("tr", {}, el("td", {}, b.name), el("td", {}, b.flow), el("td", {}, progress), el("td", {}, when(b.created_at)), buttons);
-  }));
-  if (!batches.length) $("batches").append(el("tr", {}, el("td", { colSpan: 5, className: "muted" }, "No batches yet.")));
-}
-
-function renderJobs(jobs) {
-  $("jobs").replaceChildren(...jobs.map((j) => {
-    const cancel = el("td");
-    if (!["done", "failed", "cancelled"].includes(j.state)) {
-      cancel.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/cancel`)); } }, "Cancel"));
-    }
-    if (["failed", "cancelled"].includes(j.state)) {
-      cancel.append(el("button", { className: "small", onclick: (e) => { e.stopPropagation(); act(() => post(`/jobs/${j.id}/retry`)); } }, "Retry"));
-    }
-    return el("tr", { className: "job", onclick: () => { selectedJob = j.id; showJob(); } },
-      el("td", { className: "mono" }, j.accession_number || "(none)"), el("td", {}, j.flow),
-      el("td", { className: TONE[j.state] || "" }, j.state), el("td", {}, j.source),
-      el("td", {}, when(j.updated_at)), el("td", { className: "err" }, j.error || ""), cancel);
-  }));
-  if (!jobs.length) $("jobs").append(el("tr", {}, el("td", { colSpan: 7, className: "muted" }, "No jobs.")));
-}
-
-async function showJob() {
-  if (!selectedJob) return;
-  const j = await api(`/jobs/${selectedJob}`);
-  const lines = [`${j.accession_number}  ${j.flow}${j.flow_version ? " v" + j.flow_version : ""}  ${j.state}`,
-    `job ${j.id}`, j.study_instance_uid ? `study ${j.study_instance_uid}` : "", ""];
-  for (const e of j.events) {
-    const detail = Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : "";
-    lines.push(`${when(e.at)}  ${e.kind}${detail}`);
-  }
-  for (const r of j.runs) {
-    lines.push("", `run ${r.attempt}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`,
-      r.image_digest ? `  image ${r.image_digest}` : "");
-  }
-  $("detail-body").textContent = lines.filter((l, i) => l || i >= 3).join("\n");
-  $("detail").hidden = false;
-}
-
-async function refresh() {
-  const state = $("state-filter").value;
-  const [health, batches, jobs] = await Promise.all([
-    api("/healthz"), api("/batches"), api("/jobs?limit=100" + (state ? "&state=" + state : ""))]);
-  renderHealth(health); renderBatches(batches); renderJobs(jobs);
-  $("updated").textContent = "updated " + new Date().toLocaleTimeString();
-  await showJob();
-}
-
-async function init() {
-  $("state-filter").append(...STATES.map((s) => el("option", { value: s }, s)));
-  $("state-filter").onchange = () => refresh().catch((e) => say(e.message, "bad"));
-  const me = await api("/whoami");
-  $("who").replaceChildren(el("span", { className: "chip" }, (me.name || "open access") + (me.role === "viewer" ? " (read-only)" : "")));
-  if (me.role === "viewer") document.body.classList.add("viewer");
-  const flows = await api("/flows");
-  for (const select of document.querySelectorAll(".flows")) select.append(...flows.map((f) => el("option", {}, f)));
-  $("job-form").onsubmit = (e) => { e.preventDefault(); act(async () => {
-    await post("/jobs", { accession_number: $("acc").value, flow: $("job-flow").value }); $("acc").value = ""; }, "Job submitted."); };
-  $("batch-form").onsubmit = (e) => { e.preventDefault(); act(async () => {
-    const accession_numbers = $("batch-acc").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    await post("/batches", { name: $("batch-name").value, flow: $("batch-flow").value, accession_numbers });
-    $("batch-name").value = $("batch-acc").value = ""; }, "Batch queued."); };
-  await refresh();
-  setInterval(() => refresh().catch((e) => say(e.message, "bad")), 5000);
-}
-init().catch((e) => say(e.message, "bad"));
+start().catch(() => {});
 </script>
 </body>
 </html>

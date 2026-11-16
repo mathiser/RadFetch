@@ -2,32 +2,23 @@
 
 Commands below are run on the host, in the folder with `docker-compose.yml`.
 
-## Users and tokens
+## Users and access
 
-Access to the API and UI is by named bearer tokens.
-
-```bash
-docker compose exec api radfetch token create anna --role operator
-```
+Accounts, roles, individual permissions, API tokens and the audit log are
+described in [Users and permissions](users.md). In short:
 
 ```bash
-docker compose exec api radfetch token list
+docker compose exec api radfetch user create anna --role admin
 ```
 
-```bash
-docker compose exec api radfetch token revoke anna
-```
-
-- The token is printed once at creation. Only a hash is stored, so a lost token cannot be recovered: revoke it and create a new one.
-- **`operator`** tokens can submit, cancel, retry and pause. **`viewer`** tokens are read-only, for a status screen or a monitoring system.
-- The token's name is recorded as the requester of each job and on every cancel, retry and pause, visible in the job history.
-- **The API is open until the first token exists.** Create a token before making the API reachable from other machines.
-- `RADFETCH_API_TOKEN` in `.env` additionally defines one shared operator token. Prefer named tokens: they can be revoked one by one and show who did what.
-- `/healthz` needs no token, so it can be used for health checks.
+- **The interface and API are open until the first account exists.** Create an administrator before making them reachable from other machines.
+- Roles, from least to most: `monitor`, `viewer`, `submitter`, `operator`, `admin`. Each user can be given or denied single permissions and be limited to certain flows.
+- `/healthz` needs no sign-in, so it can be used for health checks.
 
 The API has no TLS of its own. To reach it from other machines, put a reverse
-proxy (nginx, Caddy, Traefik) with HTTPS in front and keep port 8000 bound to
-localhost, as it is in the Compose file.
+proxy (nginx, Caddy, Traefik) with HTTPS in front, set `RADFETCH_PUBLIC_URL` to
+its `https://` address, and keep port 8000 bound to localhost, as it is in the
+Compose file.
 
 ## Notifications
 
@@ -64,9 +55,9 @@ delays if the webhook is down.
 
 ## Monitoring
 
-- **UI header**: job counts, gateway heartbeat, circuit breaker and batch window at a glance.
+- **Dashboard**: active and finished jobs, failure rate, PACS state, instances fetched, disk use, and per-flow success rates and times, over the last 24 hours to 30 days.
 - **`GET /healthz`**: the same as JSON, without a token.
-- **`GET /metrics`**: Prometheus text format (needs a token once tokens exist).
+- **`GET /metrics`**: Prometheus text format. Needs the `stats.view` permission: give the monitoring system a service account with the `monitor` role and a token.
 
 | Metric | Alert when |
 |---|---|
@@ -74,7 +65,7 @@ delays if the webhook is down.
 | `radfetch_gateway_heartbeat_age_seconds` | Keeps growing: the gateway is down or stuck in a very long retrieval |
 | `radfetch_oldest_active_job_seconds` | Above your tolerance: work is not moving |
 | `radfetch_jobs{state="failed"}` | Rises unexpectedly |
-| `radfetch_cache_bytes` | For capacity planning |
+| `radfetch_cache_bytes`, `radfetch_disk_used_fraction` | For capacity planning; retrieval of batches stops at 80% disk use |
 | `radfetch_gateway_batch_window_open` | Informational |
 | `radfetch_incoming_studies` | Stays above 0: pushed studies are not being processed |
 
@@ -160,11 +151,15 @@ Take a database backup before upgrading.
 - Flows with `gpu: false` are run by the same executors, one at a time each.
 - `RADFETCH_DEBUG_FAKE_GPU=true` is for development machines without a GPU. Never set it in production: model images would run on CPU or fail.
 
+## Running redundant services
+
+See [High availability](high-availability.md).
+
 ## Stopping work
 
 | To | Do |
 |---|---|
-| Stop one batch | **Pause** in the UI. Nothing new starts; a running container finishes |
+| Stop one batch | **Pause** on the Batches page. Nothing new starts; a running container finishes |
 | Stop all PACS traffic now | `docker compose stop gateway`. Jobs wait and continue when it is started again |
 | Stop all inference | `docker compose stop executor`. A running flow container keeps running until it finishes and is picked up at restart |
 | Stop everything | `docker compose stop` |
