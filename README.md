@@ -3,13 +3,7 @@
 Runs containerized workflows on studies pulled from a clinical PACS by accession
 number, one-off or in batches, without overloading the PACS.
 
-```
-pull: API / CLI ──> jobs (Postgres) ──> gateway ──┐
-                                          │ C-FIND, C-GET/C-MOVE
-                                         PACS     ├─> series cache ──> executor ──> sender ──> destinations
-push: modality / PACS ── C-STORE ──> scp ─────────┘                      │ Docker
-                                                                    flow container
-```
+![Schematic overview of RadFetch: people and modalities on the left, the clinical PACS above, the services inside RadFetch, and destinations on the right](docs/architecture.svg)
 
 | Service | Role |
 |---|---|

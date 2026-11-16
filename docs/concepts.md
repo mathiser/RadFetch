@@ -2,13 +2,13 @@
 
 ## The two ways in
 
-```
-pull: UI / API / CLI ──> jobs (Postgres) ──> gateway ──┐
-                                               │ C-FIND, C-GET / C-MOVE / DICOMweb
-                                              PACS     ├─> series cache ──> executor ──> sender ──> destinations
-push: modality / PACS ── C-STORE ──> scp ──────────────┘                      │ Docker
-                                                                         flow container
-```
+![Schematic overview of RadFetch: people and modalities on the left, the clinical PACS above, the services inside RadFetch, and destinations on the right](architecture.svg)
+
+The numbers in the diagram follow one pulled job: (1) someone submits an accession
+number and a flow; (2) the gateway looks the study up in the PACS and (3) fetches
+the selected series into the cache; (4) the executor takes the job and (5) runs the
+flow's container on those series; (6) the results go to the sender, which (7)
+delivers them.
 
 - **Pull.** You give RadFetch an accession number and a flow. It looks the study up in the PACS, fetches only the series the flow asks for, and runs the flow.
 - **Push.** A modality or PACS sends a study to RadFetch's storage SCP. Every flow that has a `trigger` matching the sender, and whose series rules match what arrived, is started.

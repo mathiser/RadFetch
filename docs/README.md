@@ -5,6 +5,8 @@ studies by accession number (one at a time or in batches) or receives them by
 DICOM push, runs a container on them, and delivers the results, while keeping
 the load on the PACS within limits you set.
 
+![Schematic overview of RadFetch](architecture.svg)
+
 ## Start here
 
 | If you want to | Read |

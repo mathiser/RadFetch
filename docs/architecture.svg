@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 770" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <title id="t">RadFetch system overview</title>
+  <desc id="d">People submit accession numbers through the web interface, API or command line. The gateway is the only service that talks to the clinical PACS; it looks studies up and fetches the selected series into a shared series cache. Modalities can also push studies to the push ingress, which places them in the same cache. The executor runs a flow container on the cached series, the sender delivers the results to their destinations and sends notifications, and the janitor cleans up. Every service records its work in Postgres, the only state store.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a6fc9"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a8f98"/></marker>
+    <style>
+      .bg { fill: #fbfbf9; }
+      .sys { fill: #f1f4f9; stroke: #b9c4d6; stroke-width: 1.5; }
+      .svc { fill: #ffffff; stroke: #7d8aa0; stroke-width: 1.5; }
+      .ext { fill: #f3f1ea; stroke: #a39e8f; stroke-width: 1.5; }
+      .store { fill: #e6eefb; stroke: #2a6fc9; stroke-width: 1.5; }
+      .cont { fill: #ffffff; stroke: #7d8aa0; stroke-width: 1.5; stroke-dasharray: 6 4; }
+      .note { fill: #fff8e1; stroke: #d9b84a; stroke-width: 1; }
+      .h { font-size: 15px; font-weight: 650; fill: #14181f; }
+      .p { font-size: 12.5px; fill: #3d4654; }
+      .s { font-size: 11.5px; fill: #5b6472; }
+      .lab { font-size: 11.5px; fill: #1f5fae; font-weight: 600; }
+      .sysl { font-size: 13px; font-weight: 700; fill: #51607a; letter-spacing: .06em; }
+      .flow { stroke: #2a6fc9; stroke-width: 2; fill: none; }
+      .aux { stroke: #8a8f98; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      .num { fill: #2a6fc9; }
+      .numt { font-size: 12px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+      .chip { fill: #ffffff; stroke: #b9c4d6; stroke-width: 1; }
+      .chipt { font-size: 12px; fill: #3d4654; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="770" rx="10"/>
+
+  <!-- the system boundary -->
+  <rect class="sys" x="250" y="120" width="712" height="560" rx="12"/>
+  <text class="sysl" x="268" y="144">RADFETCH</text>
+
+  <!-- outside: clinical PACS and the protection note -->
+  <rect class="ext" x="480" y="22" width="240" height="62" rx="8"/>
+  <text class="h" x="600" y="48" text-anchor="middle">Clinical PACS</text>
+  <text class="p" x="600" y="68" text-anchor="middle">studies, by accession number</text>
+
+  <rect class="note" x="760" y="14" width="420" height="92" rx="8"/>
+  <text class="h" x="776" y="36" style="font-size:13px">How the gateway protects the PACS</text>
+  <text class="s" x="776" y="55">One connection at a time · a budget of instances per minute</text>
+  <text class="s" x="776" y="72">Batches only inside set hours, and only a few studies ahead</text>
+  <text class="s" x="776" y="89">Fetches only the series a flow needs · pauses if the PACS is down</text>
+  <path class="aux" d="M760,78 L622,100" marker-end="url(#g)" style="stroke-dasharray:none"/>
+
+  <!-- outside: ways in -->
+  <rect class="ext" x="24" y="160" width="190" height="84" rx="8"/>
+  <text class="h" x="119" y="186" text-anchor="middle">People</text>
+  <text class="p" x="119" y="206" text-anchor="middle">web interface · API</text>
+  <text class="p" x="119" y="224" text-anchor="middle">command line</text>
+
+  <rect class="ext" x="24" y="310" width="190" height="84" rx="8"/>
+  <text class="h" x="119" y="336" text-anchor="middle">Modalities, PACS</text>
+  <text class="p" x="119" y="356" text-anchor="middle">send studies by</text>
+  <text class="p" x="119" y="374" text-anchor="middle">DICOM push (C-STORE)</text>
+
+  <!-- outside: ways out -->
+  <rect class="ext" x="986" y="440" width="194" height="84" rx="8"/>
+  <text class="h" x="1083" y="466" text-anchor="middle">Destinations</text>
+  <text class="p" x="1083" y="486" text-anchor="middle">PACS (C-STORE, STOW-RS)</text>
+  <text class="p" x="1083" y="504" text-anchor="middle">or a folder</text>
+
+  <rect class="ext" x="986" y="548" width="194" height="62" rx="8"/>
+  <text class="h" x="1083" y="573" text-anchor="middle">Notifications</text>
+  <text class="p" x="1083" y="593" text-anchor="middle">webhook</text>
+
+  <!-- services, top row -->
+  <rect class="svc" x="280" y="160" width="170" height="84" rx="8"/>
+  <text class="h" x="365" y="186" text-anchor="middle">api</text>
+  <text class="p" x="365" y="206" text-anchor="middle">web interface, accounts</text>
+  <text class="p" x="365" y="224" text-anchor="middle">and permissions</text>
+
+  <rect class="svc" x="490" y="160" width="220" height="84" rx="8"/>
+  <text class="h" x="600" y="186" text-anchor="middle">gateway</text>
+  <text class="p" x="600" y="206" text-anchor="middle">the only service that talks to</text>
+  <text class="p" x="600" y="224" text-anchor="middle">the PACS · one active at a time</text>
+
+  <rect class="cont" x="735" y="160" width="200" height="84" rx="8"/>
+  <text class="h" x="835" y="186" text-anchor="middle">flow container</text>
+  <text class="p" x="835" y="206" text-anchor="middle">/input → your model → /output</text>
+  <text class="p" x="835" y="224" text-anchor="middle">Docker · no network · GPU</text>
+
+  <!-- services, middle row -->
+  <rect class="svc" x="280" y="310" width="170" height="84" rx="8"/>
+  <text class="h" x="365" y="336" text-anchor="middle">scp</text>
+  <text class="p" x="365" y="356" text-anchor="middle">push ingress: starts flows</text>
+  <text class="p" x="365" y="374" text-anchor="middle">whose trigger matches</text>
+
+  <rect class="store" x="490" y="310" width="220" height="84" rx="8"/>
+  <text class="h" x="600" y="336" text-anchor="middle">series cache</text>
+  <text class="p" x="600" y="356" text-anchor="middle">shared disk · each series kept</text>
+  <text class="p" x="600" y="374" text-anchor="middle">once, however many flows use it</text>
+
+  <rect class="svc" x="735" y="310" width="200" height="84" rx="8"/>
+  <text class="h" x="835" y="336" text-anchor="middle">executor</text>
+  <text class="p" x="835" y="356" text-anchor="middle">runs one container at a</text>
+  <text class="p" x="835" y="374" text-anchor="middle">time · one per GPU</text>
+
+  <!-- services, bottom row -->
+  <rect class="svc" x="490" y="440" width="220" height="84" rx="8"/>
+  <text class="h" x="600" y="466" text-anchor="middle">janitor</text>
+  <text class="p" x="600" y="486" text-anchor="middle">removes cached series nobody</text>
+  <text class="p" x="600" y="504" text-anchor="middle">needs and old run files</text>
+
+  <rect class="svc" x="735" y="440" width="200" height="84" rx="8"/>
+  <text class="h" x="835" y="466" text-anchor="middle">sender</text>
+  <text class="p" x="835" y="486" text-anchor="middle">delivers results, retried</text>
+  <text class="p" x="835" y="504" text-anchor="middle">without re-running the model</text>
+
+  <!-- the state store -->
+  <rect class="store" x="280" y="572" width="640" height="84" rx="8"/>
+  <text class="h" x="600" y="600" text-anchor="middle">Postgres: the only place state is kept</text>
+  <text class="p" x="600" y="621" text-anchor="middle">jobs · retrievals · runs · deliveries · users · audit log</text>
+  <text class="s" x="600" y="641" text-anchor="middle">Every service claims its work here with a lease, so a crashed service loses nothing and a replica can take over.</text>
+  <path class="aux" d="M365,394 L365,548 L835,548 M600,524 L600,548 M835,524 L835,548"/>
+  <path class="aux" d="M600,548 L600,572" marker-start="url(#g)" marker-end="url(#g)" style="stroke-dasharray:none"/>
+  <text class="s" x="376" y="540">all services read and write here</text>
+
+  <!-- the pull path -->
+  <path class="flow" d="M214,202 L280,202" marker-end="url(#a)"/>
+  <path class="flow" d="M600,160 L600,84" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="flow" d="M600,244 L600,310" marker-end="url(#a)"/>
+  <path class="flow" d="M710,352 L735,352" marker-end="url(#a)"/>
+  <path class="flow" d="M835,310 L835,244" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="flow" d="M835,394 L835,440" marker-end="url(#a)"/>
+  <path class="flow" d="M935,482 L986,482" marker-end="url(#a)"/>
+  <path class="flow" d="M935,508 C962,508 958,579 986,579" marker-end="url(#a)"/>
+
+  <!-- the push path -->
+  <path class="flow" d="M214,352 L280,352" marker-end="url(#a)"/>
+  <path class="flow" d="M450,352 L490,352" marker-end="url(#a)"/>
+
+  <!-- step numbers and labels -->
+  <g><circle class="num" cx="247" cy="202" r="11"/><text class="numt" x="247" y="206">1</text></g>
+  <text class="lab" x="119" y="262" text-anchor="middle">accession number + flow</text>
+
+  <g><circle class="num" cx="600" cy="102" r="11"/><text class="numt" x="600" y="106">2</text></g>
+  <text class="lab" x="580" y="99" text-anchor="end">look up, then fetch</text>
+  <text class="s" x="580" y="114" text-anchor="end" style="fill:#1f5fae">C-FIND · C-GET / C-MOVE · DICOMweb</text>
+
+  <g><circle class="num" cx="600" cy="277" r="11"/><text class="numt" x="600" y="281">3</text></g>
+  <text class="lab" x="618" y="281">selected series</text>
+
+  <g><circle class="num" cx="722" cy="330" r="11"/><text class="numt" x="722" y="334">4</text></g>
+  <g><circle class="num" cx="835" cy="277" r="11"/><text class="numt" x="835" y="281">5</text></g>
+  <text class="lab" x="853" y="281">run</text>
+
+  <g><circle class="num" cx="835" cy="417" r="11"/><text class="numt" x="835" y="421">6</text></g>
+  <text class="lab" x="853" y="421">results</text>
+
+  <g><circle class="num" cx="960" cy="482" r="11"/><text class="numt" x="960" y="486">7</text></g>
+
+  <text class="lab" x="247" y="340" text-anchor="middle">push</text>
+  <text class="lab" x="119" y="412" text-anchor="middle">an alternative to steps 1–3</text>
+
+  <!-- job states -->
+  <text class="s" x="250" y="718" style="font-weight:600">A job's states</text>
+  <g>
+    <rect class="chip" x="352" y="700" width="84" height="28" rx="14"/><text class="chipt" x="394" y="719">queued</text>
+    <rect class="chip" x="462" y="700" width="96" height="28" rx="14"/><text class="chipt" x="510" y="719">retrieving</text>
+    <rect class="chip" x="584" y="700" width="76" height="28" rx="14"/><text class="chipt" x="622" y="719">ready</text>
+    <rect class="chip" x="686" y="700" width="88" height="28" rx="14"/><text class="chipt" x="730" y="719">running</text>
+    <rect class="chip" x="800" y="700" width="88" height="28" rx="14"/><text class="chipt" x="844" y="719">sending</text>
+    <rect class="chip" x="914" y="700" width="72" height="28" rx="14" style="fill:#e6eefb;stroke:#2a6fc9"/><text class="chipt" x="950" y="719">done</text>
+    <path class="aux" style="stroke-dasharray:none" d="M436,714 L460,714" marker-end="url(#g)"/>
+    <path class="aux" style="stroke-dasharray:none" d="M558,714 L582,714" marker-end="url(#g)"/>
+    <path class="aux" style="stroke-dasharray:none" d="M660,714 L684,714" marker-end="url(#g)"/>
+    <path class="aux" style="stroke-dasharray:none" d="M774,714 L798,714" marker-end="url(#g)"/>
+    <path class="aux" style="stroke-dasharray:none" d="M888,714 L912,714" marker-end="url(#g)"/>
+  </g>
+  <text class="s" x="352" y="750">A job can instead end as failed or cancelled from any state before done; both can be retried.</text>
+</svg>
