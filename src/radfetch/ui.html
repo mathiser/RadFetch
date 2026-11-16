@@ -87,6 +87,10 @@
   .perm select { width: auto; padding: 2px 6px; }
   .pill { display: inline-block; background: var(--chip); border-radius: 999px; padding: 1px 8px; font-size: 12px; margin: 1px 4px 1px 0; white-space: nowrap; }
   #login { max-width: 360px; margin: 9vh auto; }
+  .ssobtn { display: block; text-align: center; padding: 8px 12px; border-radius: 6px; background: var(--accent); color: #fff; text-decoration: none; }
+  .qr { background: #fff; display: inline-block; padding: 6px; border-radius: 6px; margin: 8px 0; }
+  .qr svg { display: block; width: 168px; height: 168px; }
+  .codes { columns: 2; font-family: ui-monospace, monospace; font-size: 13px; margin: 8px 0; padding-left: 18px; }
   .secret { background: var(--chip); border-radius: 6px; padding: 8px 10px; margin-top: 10px; font-size: 13px; word-break: break-all; }
 </style>
 </head>
@@ -163,24 +167,42 @@ async function act(fn, done) {
 }
 
 // ---- sign-in and shell ------------------------------------------------------------------
-function showLogin() {
+async function showLogin() {
   clearInterval(timer); me = null; $("top").hidden = true;
+  let config = { sso: false, password_login: true, messages: {} };
+  try { config = await (await fetch("/auth/config")).json(); } catch {}
+  // Coming back from the identity provider with a refusal: say why, once.
+  const refused = new URLSearchParams(location.search).get("sso_error");
+  if (refused) { toast(config.messages[refused] || "Single sign-on did not succeed.", "bad"); history.replaceState(null, "", location.pathname); }
   const user = el("input", { id: "login-user", autocomplete: "username", required: true });
   const pass = el("input", { id: "login-pass", type: "password", autocomplete: "current-password", required: true });
+  const code = el("input", { id: "login-code", autocomplete: "one-time-code", inputMode: "numeric", placeholder: "6 digits, or a recovery code" });
+  const codeRow = el("div", { id: "login-code-row", hidden: true }, el("label", { htmlFor: "login-code" }, "Code from your authenticator app"), code);
   const tok = el("input", { id: "login-token", type: "password", autocomplete: "off" });
   const form = el("form", { id: "login-form" },
     el("label", { htmlFor: "login-user" }, "Username"), user,
-    el("label", { htmlFor: "login-pass" }, "Password"), pass,
+    el("label", { htmlFor: "login-pass" }, "Password"), pass, codeRow,
     el("button", { className: "primary" }, "Sign in"));
   form.onsubmit = async (e) => {
     e.preventDefault();
-    try { setToken(null); await post("/auth/login", { username: user.value, password: pass.value }); await start(); }
-    catch (err) { toast(err.message, "bad"); }
+    setToken(null);
+    const body = { username: user.value, password: pass.value };
+    if (!codeRow.hidden && code.value.trim()) body.code = code.value.trim();
+    try {
+      const r = await fetch("/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const answer = await r.json().catch(() => ({}));
+      if (r.ok) { await start(); return; }
+      if (answer.mfa_required) { codeRow.hidden = false; code.required = true; code.focus(); toast("Enter the code from your authenticator app."); return; }
+      toast(typeof answer.detail === "string" ? answer.detail : "Sign-in failed.", "bad");
+    } catch (err) { toast(err.message, "bad"); }
   };
   const tform = el("form", {}, el("label", { htmlFor: "login-token" }, "API token"), tok, el("button", { className: "primary" }, "Use token"));
   tform.onsubmit = async (e) => { e.preventDefault(); setToken(tok.value.trim()); try { await start(); } catch (err) { setToken(null); toast("That token was not accepted.", "bad"); } };
+  const ssoButton = config.sso ? el("a", { id: "sso-button", href: "/auth/oidc/login", className: "ssobtn" }, config.sso_label) : "";
   $("main").replaceChildren(el("div", { id: "login" },
-    el("section", {}, el("h2", {}, "Sign in to RadFetch"), form),
+    el("section", {}, el("h2", {}, "Sign in to RadFetch"), ssoButton,
+      config.sso && config.password_login ? el("p", { className: "muted", style: "margin:14px 0 2px" }, "or with a RadFetch account") : "",
+      config.password_login ? form : ""),
     el("details", { className: "data" }, el("summary", {}, "Sign in with an API token instead"), el("section", {}, tform))));
 }
 
@@ -189,6 +211,7 @@ const TABS = [
   ["submit", "Submit", null], ["users", "Users", "users.manage"], ["audit", "Audit log", "audit.view"], ["account", "Account", null],
 ];
 function tabs() {
+  if (me.mfa_setup_required) return TABS.filter(([id]) => id === "account");  // nothing else works until it is set up
   return TABS.filter(([id, , perm]) => {
     if (id === "submit") return can("jobs.submit") || can("batches.submit");
     if (id === "account") return me.auth_enabled && me.name && me.name !== "shared-token";
@@ -212,8 +235,11 @@ async function start() {
   await render();
 }
 async function signOut() {
-  try { await post("/auth/logout"); } catch {}
+  let answer = {};
+  try { answer = await post("/auth/logout"); } catch {}
   setToken(null);
+  // A single sign-on session is also ended at the identity provider, which then sends the browser back here.
+  if (answer.sso_logout_url) { location.href = answer.sso_logout_url; return; }
   history.replaceState(null, "", location.pathname);  // the next person starts on their own first page
   Object.assign(view, { job: null, user: null, state: "", search: "", flow: "", contains: "" });
   showLogin();
@@ -477,17 +503,18 @@ const VIEWS = {
       el("td", {}, u.username), el("td", {}, u.role),
       el("td", { className: "wrap" }, ...u.grants.map((p) => el("span", { className: "pill" }, "+ " + p)), ...u.denies.map((p) => el("span", { className: "pill" }, "− " + p))),
       el("td", {}, u.allowed_flows ? u.allowed_flows.join(", ") || "none" : "all"),
-      el("td", { className: u.disabled ? "bad" : "" }, u.disabled ? "disabled" : u.has_password ? "password" : "tokens only"),
+      el("td", { className: u.disabled ? "bad" : "" }, u.disabled ? "disabled" : u.sso ? "single sign-on" : u.has_password ? (u.totp_enabled ? "password + code" : "password") : "tokens only"),
       el("td", { className: "num" }, num(u.tokens)), el("td", {}, when(u.last_login_at) || "never")));
-    const nu = el("input", { id: "new-user", required: true, pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}", autocomplete: "off" }), nr = roleSelect("viewer", "new-role");
-    const svc = el("input", { type: "checkbox", id: "new-svc" });
+    const nu = el("input", { id: "new-user", required: true, pattern: "[A-Za-z0-9][A-Za-z0-9._@\\-]{0,127}", autocomplete: "off" }), nr = roleSelect("viewer", "new-role");
+    const svc = el("input", { type: "checkbox", id: "new-svc" }), viaSso = el("input", { type: "checkbox", id: "new-sso" });
     const create = el("form", { id: "user-form" }, el("label", { htmlFor: "new-user" }, "Username"), nu, el("label", { htmlFor: "new-role" }, "Role"), nr,
+      el("label", {}, viaSso, " Signs in with single sign-on (no password; the username must match the identity provider's)"),
       el("label", {}, svc, " Service account (no password; used with API tokens only)"), el("button", { className: "primary" }, "Create user"));
     const secret = el("div", { id: "secret" });
     create.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        const u = await post("/users", { username: nu.value, role: nr.value, service_account: svc.checked });
+        const u = await post("/users", { username: nu.value, role: nr.value, service_account: svc.checked, sso: viaSso.checked });
         view.user = u.username; await render();
         if (u.generated_password) $("secret").replaceChildren(el("div", { className: "secret" }, `Password for ${u.username}, shown only now: `, el("b", { className: "mono" }, u.generated_password)));
       } catch (err) { toast(err.message, "bad"); }
@@ -522,6 +549,7 @@ const VIEWS = {
       const tools = el("div", { className: "bar", style: "margin-top:14px" },
         el("button", { className: "small", onclick: async () => { try { const pw = crypto.getRandomValues(new Uint8Array(15)).reduce((s, b) => s + "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 56], ""); await send("PATCH", "/users/" + u.username, { password: pw }); show("New password", pw); } catch (e) { toast(e.message, "bad"); } } }, "Reset password"),
         el("button", { className: "small", onclick: async () => { try { const t = await post(`/users/${u.username}/tokens`, {}); show("API token", t.token); } catch (e) { toast(e.message, "bad"); } } }, "Create API token"),
+        u.totp_enabled ? el("button", { className: "small", onclick: () => confirm(`Remove two-step sign-in for ${u.username}? They sign in with the password alone until they set it up again.`) && act(() => send("PATCH", "/users/" + u.username, { reset_mfa: true }), "Two-step sign-in removed.") }, "Reset two-step sign-in") : "",
         el("button", { className: "small", onclick: () => act(() => send("PATCH", "/users/" + u.username, { disabled: !u.disabled })) }, u.disabled ? "Enable" : "Disable"),
         el("button", { className: "small danger", onclick: () => confirm(`Delete user ${u.username}? Their tokens stop working.`) && act(async () => { await send("DELETE", "/users/" + u.username); view.user = null; }) }, "Delete"));
       out.push(el("section", { id: "user-edit" }, el("div", { className: "bar" }, el("h2", {}, "User " + u.username), el("button", { className: "small", onclick: () => { view.user = null; render(); } }, "Close")),
@@ -541,7 +569,8 @@ const VIEWS = {
   },
 
   async account() {
-    const tokens = await api("/me/tokens");
+    // Until a mandatory second factor is set up, nothing else is allowed: show only that.
+    const tokens = me.mfa_setup_required ? [] : await api("/me/tokens");
     const cur = el("input", { type: "password", id: "pw-cur", autocomplete: "current-password", required: true }), nw = el("input", { type: "password", id: "pw-new", autocomplete: "new-password", required: true, minLength: 10 });
     const pw = el("form", {}, el("label", { htmlFor: "pw-cur" }, "Current password"), cur, el("label", { htmlFor: "pw-new" }, "New password (at least 10 characters)"), nw, el("button", { className: "primary" }, "Change password"));
     pw.onsubmit = async (e) => { e.preventDefault(); try { await post("/me/password", { current_password: cur.value, new_password: nw.value }); toast("Password changed. Please sign in again."); showLogin(); } catch (err) { toast(err.message, "bad"); } };
@@ -551,13 +580,55 @@ const VIEWS = {
         el("td", {}, el("button", { className: "small danger", onclick: () => act(() => send("DELETE", "/me/tokens/" + t.name), "Token revoked.") }, "Revoke"))))));
     const make = el("button", { className: "primary", onclick: async () => { try { const t = await post("/me/tokens", {}); await render(); toast("Token created."); $("main").querySelector("#my-secret").replaceChildren(el("div", { className: "secret" }, "Your new API token, shown only now: ", el("b", { className: "mono" }, t.token))); } catch (e) { toast(e.message, "bad"); } } }, "Create API token");
     secret.id = "my-secret";
+    const mfa = el("section", { id: "mfa" }, el("h2", {}, "Two-step sign-in"));
+    if (me.sso) {
+      mfa.append(el("p", { className: "muted" }, "You signed in with single sign-on. Its second factor is managed by your organisation's sign-in service."));
+    } else if (me.mfa_enabled) {
+      const pwd = el("input", { type: "password", id: "mfa-pw", autocomplete: "current-password", placeholder: "Your password" });
+      mfa.append(el("p", {}, "On. Signing in needs a code from your authenticator app."),
+        el("p", { className: "muted" }, "Lost the app? Use a recovery code to sign in, then set it up again here. An administrator can also reset it."),
+        el("button", { id: "mfa-setup", className: "small", onclick: () => mfaSetup(mfa) }, "Set up again (new app or phone)"));
+      if (!me.mfa_required_by_policy) mfa.append(el("div", { className: "bar", style: "margin-top:12px" }, pwd,
+        el("button", { className: "small danger", onclick: () => act(async () => { await post("/me/mfa/remove", { password: pwd.value }); me = await api("/whoami"); }, "Two-step sign-in removed.") }, "Turn off")));
+    } else {
+      mfa.append(el("p", { className: me.mfa_setup_required ? "bad" : "" }, me.mfa_setup_required
+        ? "Two-step sign-in is required here. Set it up to continue."
+        : "Off. Turn it on to require a code from an authenticator app in addition to your password."),
+        el("button", { id: "mfa-setup", className: "primary", onclick: () => mfaSetup(mfa) }, "Set up"));
+    }
+    if (me.mfa_setup_required) return [el("div", { className: "grid2" }, mfa)];
     return [el("div", { className: "grid2" },
+      mfa,
       el("section", {}, el("h2", {}, "Your access"), el("p", {}, `Signed in as ${me.name}, role ${me.role}.`), el("p", { className: "muted" }, me.allowed_flows ? "Limited to flows: " + (me.allowed_flows.join(", ") || "none") : "All flows."),
         el("div", {}, ...me.permissions.map((p) => el("span", { className: "pill" }, p)))),
-      el("section", {}, el("h2", {}, "Password"), pw),
+      me.sso ? "" : el("section", {}, el("h2", {}, "Password"), pw),
       el("section", {}, el("h2", {}, "API tokens"), el("p", { className: "muted" }, "A token acts with your rights, for scripts and other programs."), list, make, secret))];
   },
 };
+
+async function mfaSetup(section) {
+  try {
+    const setup = await post("/me/mfa/setup");
+    const qr = el("div", { className: "qr" });
+    qr.append(new DOMParser().parseFromString(setup.qr_svg, "image/svg+xml").documentElement);
+    const code = el("input", { id: "mfa-code", inputMode: "numeric", autocomplete: "one-time-code", placeholder: "6-digit code", style: "max-width:160px" });
+    const confirmIt = el("button", { className: "primary", id: "mfa-confirm", style: "margin-top:0" }, "Confirm");
+    confirmIt.onclick = async () => {
+      try {
+        const done = await post("/me/mfa/confirm", { code: code.value });
+        me = await api("/whoami");
+        section.replaceChildren(el("h2", {}, "Two-step sign-in"), el("p", { className: "ok" }, "Two-step sign-in is on."),
+          el("p", {}, "Recovery codes, shown only now. Each works once if you lose your phone. Keep them somewhere safe:"),
+          el("ol", { className: "codes", id: "recovery-codes" }, ...done.recovery_codes.map((c) => el("li", {}, c))),
+          el("button", { className: "small", onclick: () => start() }, "I have saved them"));
+      } catch (e) { toast(e.message, "bad"); }
+    };
+    section.replaceChildren(el("h2", {}, "Two-step sign-in"),
+      el("p", {}, "1. Scan this with an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password and others):"), qr,
+      el("p", { className: "muted" }, "Cannot scan? Enter this key in the app: ", el("b", { className: "mono", id: "mfa-secret" }, setup.secret)),
+      el("p", {}, "2. Enter the code the app shows:"), el("div", { className: "bar" }, code, confirmIt));
+  } catch (e) { toast(e.message, "bad"); }
+}
 
 async function downloadCsv(b) {
   const r = await api(`/batches/${b.id}/jobs.csv`, { raw: true });

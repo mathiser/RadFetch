@@ -285,6 +285,7 @@ def user_create(
     role: str = typer.Option("viewer", help="monitor, viewer, submitter, operator or admin"),
     password_stdin: bool = typer.Option(False, help="read the password from standard input instead of generating one"),
     service_account: bool = typer.Option(False, help="no password; the account is used with API tokens only"),
+    sso: bool = typer.Option(False, help="signs in with single sign-on; the name must match the identity provider's"),
     flows: str | None = typer.Option(None, help="comma-separated flows the user is limited to (default: all)"),
 ):
     """Create a user. A generated password is printed once. The first user should be an admin."""
@@ -295,13 +296,13 @@ def user_create(
     if role not in auth.ROLES:
         _fail(f"role must be one of: {', '.join(auth.ROLES)}")
     password = generated = None
-    if not service_account:
+    if not (service_account or sso):
         password = sys.stdin.readline().rstrip("\n") if password_stdin else (generated := auth.generate_password())
     try:
         store.create_user(
             _admin_conn(), username, role,
             auth.hash_password(password) if password else None,
-            allowed_flows=[f.strip() for f in flows.split(",")] if flows else None, by="cli",
+            allowed_flows=[f.strip() for f in flows.split(",")] if flows else None, by="cli", sso=sso,
         )
     except Exception as exc:
         _fail(str(exc).splitlines()[0])
@@ -374,6 +375,13 @@ def user_passwd(username: str, password_stdin: bool = typer.Option(False)):
     if ok is None:
         _fail("no such user")
     typer.echo("password changed" if password_stdin else f"password: {password}")
+
+
+@user_app.command("reset-mfa")
+def user_reset_mfa(username: str):
+    """Remove a user's two-step sign-in, e.g. after a lost phone. They can set it up again."""
+    ok = store.totp_disable(_admin_conn(), username, by="cli")
+    typer.echo("two-step sign-in removed" if ok else "that user has no two-step sign-in")
 
 
 @user_app.command("delete")

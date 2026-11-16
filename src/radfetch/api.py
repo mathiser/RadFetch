@@ -12,29 +12,36 @@ rights: keep it on localhost until the first administrator has been created.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import json
 import secrets
 import time
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from importlib import resources
 from collections.abc import Callable, Iterator
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+import segno
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
 from radfetch import auth, store
+from radfetch.sso import MESSAGES as SSO_MESSAGES
+from radfetch.sso import Oidc, SsoError
 from radfetch.auth import Principal
 from radfetch.config import BATCH_PRIORITY, Settings
 from radfetch.flows import FlowError, list_flows, load_flow
 
+log = logging.getLogger("radfetch.api")
+
 SESSION_COOKIE = "radfetch_session"
-USERNAME = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+USERNAME = auth.USERNAME_PATTERN
 
 
 class JobIn(BaseModel):
@@ -51,6 +58,15 @@ class BatchIn(BaseModel):
 class LoginIn(BaseModel):
     username: str
     password: str
+    code: str | None = None  # authenticator or recovery code, when the account has two-step sign-in
+
+
+class CodeIn(BaseModel):
+    code: str
+
+
+class MfaRemoveIn(BaseModel):
+    password: str
 
 
 class UserIn(BaseModel):
@@ -58,6 +74,7 @@ class UserIn(BaseModel):
     role: str
     password: str | None = None  # omitted: a password is generated and returned once
     service_account: bool = False  # no password at all; use tokens
+    sso: bool = False  # signs in through the identity provider; no password
     grants: list[str] = []
     denies: list[str] = []
     allowed_flows: list[str] | None = None
@@ -71,6 +88,7 @@ class UserPatch(BaseModel):
     all_flows: bool = False  # set true to lift a flow restriction
     disabled: bool | None = None
     password: str | None = None
+    reset_mfa: bool = False  # remove the user's two-step sign-in, e.g. after a lost phone
 
 
 class PasswordIn(BaseModel):
@@ -100,17 +118,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with pool.connection() as conn:
             yield conn
 
+    oidc = Oidc(settings)
+    oidc.check_config()
+
     # --- who is asking -----------------------------------------------------------------
 
     def auth_enabled(conn) -> bool:
-        return settings.api_token is not None or store.users_exist(conn)
+        # With single sign-on configured the API is never open, even before the first person has signed in.
+        return settings.api_token is not None or oidc.enabled or store.users_exist(conn)
 
-    def current_user(
+    def signed_in(
         authorization: str | None = Header(None),
         x_remote_user: str | None = Header(None),
         session: str | None = Cookie(None, alias=SESSION_COOKIE),
         conn=Depends(db),
     ) -> Principal:
+        """Who is asking. Use `current_user` unless the endpoint must work before two-step sign-in is set up."""
         token = (authorization or "").removeprefix("Bearer ").strip()
         if token:
             if settings.api_token and secrets.compare_digest(token.encode(), settings.api_token.encode()):
@@ -121,10 +144,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif session:
             user = store.user_for_session(conn, session)
             if user:
-                return auth.principal_for(user)
+                principal = auth.principal_for(user)
+                # A person who signed in with a password must have a second factor when that is the rule.
+                # Single sign-on leaves the second factor to the identity provider.
+                must_set_up = settings.require_mfa and not user["session_sso"] and not user["totp_enabled"]
+                return dataclasses.replace(principal, sso=user["session_sso"], mfa_setup_required=must_set_up)
         elif not auth_enabled(conn):
             return Principal(x_remote_user, "operator", auth.ROLES["operator"])  # open mode
         raise HTTPException(401, "not signed in", headers={"WWW-Authenticate": "Bearer"})
+
+    def current_user(user: Principal = Depends(signed_in)) -> Principal:
+        if user.mfa_setup_required:
+            raise HTTPException(403, "set up two-step sign-in first (Account page)")
+        return user
 
     def need(permission: str) -> Callable[..., Principal]:
         def check(user: Principal = Depends(current_user)) -> Principal:
@@ -186,6 +218,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "permissions": sorted(user.permissions),
             "allowed_flows": flows_of(user),
             "auth_enabled": auth_enabled(conn),
+            "sso": user.sso,
+            "mfa_enabled": user.mfa_enabled,
+            "mfa_setup_required": user.mfa_setup_required,
+            "mfa_required_by_policy": settings.require_mfa,
         }
 
     # --- UI and sign-in ----------------------------------------------------------------
@@ -199,13 +235,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Always open, for health checks. Job counts only."""
         return {"ok": True, "jobs": store.state_counts(conn), "status": store.get_status(conn)}
 
-    @app.post("/auth/login")
-    def login(body: LoginIn, response: Response, conn=Depends(db)):
-        user = store.check_login(conn, body.username, lambda stored: auth.verify_password(body.password, stored))
-        if user is None:
-            time.sleep(0.5)  # slows guessing; the account also locks after repeated failures
-            raise HTTPException(401, "wrong username or password, or the account is locked or disabled")
-        token = store.create_session(conn, user["id"], settings.session_hours)
+    def start_session(response: Response, conn, user: dict, sso: bool = False) -> None:
+        token = store.create_session(conn, user["id"], settings.session_hours, sso)
         response.set_cookie(
             SESSION_COOKIE,
             token,
@@ -214,17 +245,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             samesite="strict",
             secure=settings.public_url.startswith("https://"),
         )
-        return describe(auth.principal_for(user), conn)
+
+    @app.get("/auth/config")
+    def auth_config():
+        """What the sign-in screen should offer. Open to everyone."""
+        return {
+            "sso": oidc.enabled,
+            "sso_label": settings.oidc_button_label,
+            "password_login": settings.password_login or not oidc.enabled,
+            "messages": SSO_MESSAGES,
+        }
+
+    @app.post("/auth/login")
+    def login(body: LoginIn, response: Response, conn=Depends(db)):
+        if oidc.enabled and not settings.password_login:
+            raise HTTPException(403, "password sign-in is turned off; use single sign-on")
+        user, reason = store.check_login(
+            conn, body.username, lambda stored: auth.verify_password(body.password, stored), body.code
+        )
+        if reason == "mfa_required":
+            # The password was right; ask for the code. Nothing is signed in yet.
+            return JSONResponse({"detail": "enter the code from your authenticator app", "mfa_required": True}, 401)
+        if user is None:
+            time.sleep(0.5)  # slows guessing; the account also locks after repeated failures
+            raise HTTPException(
+                401,
+                "that code is not right" if reason == "mfa_bad"
+                else "wrong username or password, or the account is locked or disabled",
+            )
+        start_session(response, conn, user)
+        return {**describe(auth.principal_for(user), conn),
+                "mfa_setup_required": settings.require_mfa and not user["totp_enabled"]}
+
+    @app.get("/auth/oidc/login", include_in_schema=False)
+    def oidc_login(conn=Depends(db)):
+        try:
+            return RedirectResponse(oidc.begin(conn), 302)
+        except SsoError as exc:
+            log.warning("single sign-on could not start: %s", exc)
+            return RedirectResponse(f"/?sso_error={exc.code}", 303)
+
+    @app.get("/auth/oidc/callback", include_in_schema=False)
+    def oidc_callback(code: str = "", state: str = "", error: str = "", conn=Depends(db)):
+        try:
+            if error or not code:
+                raise SsoError("denied", error)
+            user = oidc.sign_in(conn, code, state)
+        except SsoError as exc:
+            log.warning("single sign-on refused (%s): %s", exc.code, exc)
+            store.log_event(conn, None, "sso_refused", reason=exc.code)
+            return RedirectResponse(f"/?sso_error={exc.code}", 303)
+        response = RedirectResponse("/", 303)
+        start_session(response, conn, user, sso=True)
+        return response
 
     @app.post("/auth/logout")
     def logout(response: Response, session: str | None = Cookie(None, alias=SESSION_COOKIE), conn=Depends(db)):
+        """Ends the RadFetch session. For a single sign-on session the answer also says where the
+        browser can go to sign out at the identity provider."""
+        sso_logout = None
         if session:
+            user = store.user_for_session(conn, session)
+            if user and user["session_sso"] and oidc.enabled:
+                sso_logout = oidc.logout_url()
             store.delete_session(conn, session)
         response.delete_cookie(SESSION_COOKIE)
-        return {"ok": True}
+        return {"ok": True, "sso_logout_url": sso_logout}
 
     @app.get("/whoami")
-    def whoami(user: Principal = Depends(current_user), conn=Depends(db)):
+    def whoami(user: Principal = Depends(signed_in), conn=Depends(db)):
         return describe(user, conn)
 
     @app.get("/roles")
@@ -248,13 +337,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/me/password")
     def change_password(body: PasswordIn, user: Principal = Depends(current_user), conn=Depends(db)):
         name = real_user(user)
-        if not store.check_login(conn, name, lambda stored: auth.verify_password(body.current_password, stored)):
+        ok, _ = store.check_login(
+            conn, name, lambda stored: auth.verify_password(body.current_password, stored), second_factor=False
+        )
+        if not ok:
             raise HTTPException(403, "the current password is wrong")
         try:
             store.update_user(conn, name, {"password_hash": auth.hash_password(body.new_password)}, by=name)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {"ok": True, "signed_out": True}
+
+    # Two-step sign-in. These work before it is set up, so they depend on signed_in, not current_user.
+
+    @app.post("/me/mfa/setup")
+    def mfa_setup(user: Principal = Depends(signed_in), conn=Depends(db)):
+        """Start setting up an authenticator app. Returns the secret, and a QR code to scan."""
+        name = real_user(user)
+        if user.sso:
+            raise HTTPException(409, "this sign-in uses single sign-on; its second factor is managed there")
+        secret = store.totp_begin(conn, name)
+        uri = auth.totp_uri(secret, name)
+        buffer = io.BytesIO()
+        segno.make(uri, error="m").save(buffer, kind="svg", scale=4, border=2, xmldecl=False)
+        return {"secret": secret, "uri": uri, "qr_svg": buffer.getvalue().decode()}
+
+    @app.post("/me/mfa/confirm")
+    def mfa_confirm(body: CodeIn, user: Principal = Depends(signed_in), conn=Depends(db)):
+        """Confirm the set-up with a code from the app. Returns one-time recovery codes, shown only now."""
+        codes = store.totp_confirm(conn, real_user(user), body.code)
+        if codes is None:
+            raise HTTPException(422, "that code is not right; check the app and the device's clock")
+        return {"recovery_codes": codes}
+
+    @app.post("/me/mfa/remove")
+    def mfa_remove(body: MfaRemoveIn, user: Principal = Depends(signed_in), conn=Depends(db)):
+        name = real_user(user)
+        if settings.require_mfa:
+            raise HTTPException(409, "two-step sign-in is mandatory here; set it up again instead of removing it")
+        ok, _ = store.check_login(
+            conn, name, lambda stored: auth.verify_password(body.password, stored), second_factor=False
+        )
+        if not ok:
+            raise HTTPException(403, "the password is wrong")
+        return {"removed": store.totp_disable(conn, name, by=name)}
 
     @app.get("/me/tokens")
     def my_tokens(user: Principal = Depends(current_user), conn=Depends(db)):
@@ -534,7 +660,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         validated(body.role, body.grants, body.denies)
         generated = None
         password_hash = None
-        if not body.service_account:
+        if not (body.service_account or body.sso):
             password = body.password or (generated := auth.generate_password())
             try:
                 password_hash = auth.hash_password(password)
@@ -542,7 +668,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, str(exc)) from exc
         try:
             user = store.create_user(
-                conn, body.username, body.role, password_hash, body.grants, body.denies, body.allowed_flows, actor.name
+                conn, body.username, body.role, password_hash, body.grants, body.denies, body.allowed_flows,
+                actor.name, sso=body.sso,
             )
         except UniqueViolation as exc:
             raise HTTPException(409, "that username is taken") from exc
@@ -551,7 +678,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.patch("/users/{username}")
     def change_user(username: str, body: UserPatch, actor: Principal = Depends(admin), conn=Depends(db)):
         validated(body.role, body.grants, body.denies)
-        changes = body.model_dump(exclude_unset=True, exclude={"password", "all_flows"})
+        changes = body.model_dump(exclude_unset=True, exclude={"password", "all_flows", "reset_mfa"})
+        if body.reset_mfa:
+            store.totp_disable(conn, username, by=actor.name)
         if body.all_flows:
             changes["allowed_flows"] = None
         elif "allowed_flows" in changes and changes["allowed_flows"] is None:

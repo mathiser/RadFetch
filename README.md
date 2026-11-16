@@ -23,7 +23,7 @@ Full documentation is in [`docs/`](docs/README.md), published at https://mathise
 - [Tutorial](docs/tutorial.md): first jobs on your own machine with a fake PACS
 - [Installation](docs/installation.md): checklist for a GPU host and a real PACS
 - [Connecting a PACS](docs/pacs.md), [Writing flows](docs/flows.md), [Configuration reference](docs/configuration.md)
-- [Administration](docs/administration.md), [Users and permissions](docs/users.md), [High availability](docs/high-availability.md), [Troubleshooting](docs/troubleshooting.md)
+- [Administration](docs/administration.md), [Users and permissions](docs/users.md), [Single sign-on](docs/sso.md), [High availability](docs/high-availability.md), [Troubleshooting](docs/troubleshooting.md)
 - [API](docs/api.md) and [command line](docs/cli.md) references, [Development](docs/development.md)
 
 ## Quick start (with a fake PACS)
@@ -52,6 +52,7 @@ Open http://localhost:8000, submit accession number `ACC0001` with the flow
 - Delivery by C-STORE, STOW-RS or to a directory, retried independently of inference
 - Web interface with dashboards, HTTP API, Prometheus metrics, webhook notifications
 - User accounts with five roles, individually adjustable permissions and per-flow restrictions; audit log
+- Single sign-on (OpenID Connect) with roles from directory groups; two-step sign-in with authenticator apps
 - Redundant services with automatic takeover; example Docker Swarm stack
 - Structured results: flows report arbitrary JSON, stored per job, searchable and exportable as CSV
 - Traceability: per-run image digest, a manifest with every result, an audit trail per job

@@ -44,6 +44,7 @@ nav:
   - Running it:
       - Administration: administration.md
       - Users and permissions: users.md
+      - Single sign-on and two-step sign-in: sso.md
       - High availability: high-availability.md
       - Troubleshooting: troubleshooting.md
       - Upgrade notes: upgrading.md

@@ -25,6 +25,7 @@ the load on the PACS within limits you set.
 
 - [Administration](administration.md): notifications, monitoring, backup, retention, upgrades, GPUs
 - [Users and permissions](users.md): roles, individual permissions, flow restrictions, tokens, audit log
+- [Single sign-on and two-step sign-in](sso.md): OpenID Connect, roles from directory groups, authenticator apps
 - [High availability](high-availability.md): redundant services, Docker Swarm, what is and is not covered
 - [Troubleshooting](troubleshooting.md): what an error or symptom means and what to do
 - [Upgrade notes](upgrading.md): changes that need something from you when upgrading

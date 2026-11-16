@@ -11,7 +11,10 @@ Jobs and batches of flows an account is not allowed to see behave as if they did
 
 | Method and path | Needs | Does |
 |---|---|---|
-| `POST /auth/login` | | Body `{"username", "password"}`. Sets the session cookie |
+| `GET /auth/config` | | Whether single sign-on and password sign-in are offered |
+| `POST /auth/login` | | Body `{"username", "password", "code"?}`. Sets the session cookie. `401` with `"mfa_required": true` means the password was right and a code is needed |
+| `GET /auth/oidc/login` | | Starts single sign-on: redirects the browser to the identity provider |
+| `POST /me/mfa/setup`, `POST /me/mfa/confirm`, `POST /me/mfa/remove` | signed in | Set up two-step sign-in (returns secret and QR code), confirm it with a code (returns recovery codes), remove it (needs the password) |
 | `POST /auth/logout` | | Ends the session |
 | `GET /whoami` | signed in | Name, role, effective permissions, allowed flows |
 | `GET /roles` | signed in | The roles and every permission |
@@ -71,8 +74,8 @@ All need `users.manage`.
 | Method and path | Does |
 |---|---|
 | `GET /users` | Accounts with role, adjustments, effective permissions and token count |
-| `POST /users` | Body: `{"username", "role", "password"?, "service_account"?, "grants"?, "denies"?, "allowed_flows"?}`. Without a password one is generated and returned once |
-| `PATCH /users/{name}` | Any of `role`, `grants`, `denies`, `allowed_flows`, `all_flows: true`, `disabled`, `password` |
+| `POST /users` | Body: `{"username", "role", "password"?, "service_account"?, "sso"?, "grants"?, "denies"?, "allowed_flows"?}`. Without a password one is generated and returned once |
+| `PATCH /users/{name}` | Any of `role`, `grants`, `denies`, `allowed_flows`, `all_flows: true`, `disabled`, `password`, `reset_mfa: true` |
 | `DELETE /users/{name}` | Delete the account and its tokens |
 | `GET /users/{name}/tokens`, `POST /users/{name}/tokens`, `DELETE /users/{name}/tokens/{token}` | List, create (shown once) and revoke a user's API tokens |
 

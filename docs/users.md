@@ -121,7 +121,7 @@ Things to know:
 - **Disabling or changing a password signs the user out everywhere.** Their API tokens stop working while the account is disabled.
 - **There is always an administrator.** RadFetch refuses a change that would leave no enabled administrator who can sign in.
 - **Deleting a user** removes their tokens. Their jobs remain, with the name they were submitted under.
-- **Lockout.** Ten wrong passwords in a row lock an account for 15 minutes. An administrator can lift it at once by resetting the password.
+- **Lockout.** Ten wrong passwords or codes in a row lock an account for 15 minutes. An administrator can lift it at once by resetting the password.
 - Passwords must be at least 10 characters and are stored only as a salted scrypt hash.
 
 ## API tokens
@@ -149,9 +149,14 @@ Each job's own history is on the job's page.
 Actions taken on the command line are recorded as done by `cli`: anyone who can
 run commands on the host is in effect an administrator.
 
-## Signing in through a proxy
+## Signing in
 
-RadFetch has no single sign-on of its own. Sessions are a cookie that is
-`HttpOnly` and `SameSite=Strict`, and marked `Secure` when `RADFETCH_PUBLIC_URL`
-starts with `https://`. Serve the interface over HTTPS through a reverse proxy
-and set that variable. A session lasts `RADFETCH_SESSION_HOURS` (12 by default).
+- **Password accounts** sign in with username and password, optionally (or mandatorily) with a code from an authenticator app.
+- **Single sign-on** lets people use your organisation's identity provider; their role can follow their directory groups.
+
+Both are described in [Single sign-on and two-step sign-in](sso.md).
+
+Sessions are a cookie that is `HttpOnly` and `SameSite=Strict`, and marked
+`Secure` when `RADFETCH_PUBLIC_URL` starts with `https://`. Serve the interface
+over HTTPS through a reverse proxy and set that variable. A session lasts
+`RADFETCH_SESSION_HOURS` (12 by default).

@@ -127,6 +127,14 @@ an hour. Restarting the gateway makes it try at once.
 | "wrong username or password, or the account is locked or disabled" | One of those three; the message does not say which on purpose. After ten wrong passwords an account is locked for 15 minutes. An administrator can reset the password, which also lifts the lock |
 | Signed out unexpectedly | Sessions last `RADFETCH_SESSION_HOURS`; a password change or disabling the account signs out at once |
 | No administrator can sign in | On the host: `docker compose exec api radfetch user passwd <name>` |
+| After single sign-on: "you have not been given access to RadFetch" | The person is in no group named in `RADFETCH_OIDC_ROLE_MAP` and there is no default role. Add them to a mapped group, or create an account for them marked single sign-on |
+| After single sign-on: "an account with your username already exists" | A password or service account has that name. Rename or delete it, or create the person under a different username claim |
+| After single sign-on: "the identity provider's answer could not be verified" | The issuer URL, client ID or secret do not match the provider's registration, or the server clock is wrong. The API log has the detail |
+| After single sign-on: "a second factor is required" | `RADFETCH_OIDC_REQUIRE_AMR` or `…_ACR` is set and the provider did not report it; see [Single sign-on](sso.md) |
+| Single sign-on button missing | `RADFETCH_OIDC_ISSUER` and `RADFETCH_OIDC_CLIENT_ID` are not both set, or the API was not restarted |
+| "that code is not right" | The authenticator's code is wrong or already used, or the phone's or server's clock is off. A recovery code also works |
+| Lost the authenticator | Sign in with a recovery code, or ask an administrator to reset two-step sign-in |
+| "set up two-step sign-in first" | `RADFETCH_REQUIRE_MFA` is on: open the Account page and set it up |
 | "you lack the permission …" | The account's role or individual settings do not allow the action; see [Users and permissions](users.md) |
 | A job someone else can see is "not found" | The account is limited to other flows |
 

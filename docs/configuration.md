@@ -83,6 +83,14 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 |---|---|---|
 | `RADFETCH_API_TOKEN` | none | One shared token with operator rights, outside the accounts |
 | `RADFETCH_SESSION_HOURS` | `12` | How long a sign-in in the web interface lasts |
+| `RADFETCH_REQUIRE_MFA` | `false` | Password accounts must set up two-step sign-in before they can do anything |
+| `RADFETCH_PASSWORD_LOGIN` | `true` | Whether password sign-in is offered next to single sign-on |
+| `RADFETCH_OIDC_ISSUER` | empty (off) | Issuer URL of the identity provider; turns single sign-on on |
+| `RADFETCH_OIDC_CLIENT_ID`, `RADFETCH_OIDC_CLIENT_SECRET` | | RadFetch's registration at the provider |
+| `RADFETCH_OIDC_ROLE_MAP` | empty | JSON object mapping directory groups to roles |
+| `RADFETCH_OIDC_DEFAULT_ROLE` | empty | Role for people in no mapped group; empty refuses them |
+| `RADFETCH_OIDC_REQUIRE_AMR`, `RADFETCH_OIDC_REQUIRE_ACR`, `RADFETCH_OIDC_ACR_VALUES` | empty | Insist that the provider used a second factor |
+| `RADFETCH_OIDC_USERNAME_CLAIM`, `RADFETCH_OIDC_GROUPS_CLAIM`, `RADFETCH_OIDC_SCOPES`, `RADFETCH_OIDC_BUTTON_LABEL` | see [Single sign-on](sso.md) | Adjustments for the provider |
 | `RADFETCH_NOTIFY_WEBHOOK_URL` | empty (off) | Where to POST notifications |
 | `RADFETCH_NOTIFY_INCLUDE_IDENTIFIERS` | `false` | Include accession numbers and error text in notifications |
 | `RADFETCH_PUBLIC_URL` | empty | Address of the web interface. Added as a link in notifications; when it starts with `https://`, session cookies are marked secure |

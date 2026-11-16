@@ -4,6 +4,12 @@ How to upgrade is in [Administration](administration.md#upgrading): pull, then
 `docker compose up -d --build`. Database changes are applied automatically. This
 page lists the changes that need something from you, newest first.
 
+## Single sign-on and two-step sign-in
+
+- Nothing changes until you configure them; see [Single sign-on and two-step sign-in](sso.md).
+- Usernames may now contain `@`, so that e-mail style names from an identity provider work.
+- With `RADFETCH_OIDC_ISSUER` set, `RADFETCH_PUBLIC_URL` becomes mandatory, and the interface is no longer open before the first account exists.
+
 ## Executors take single steps; GPU and CPU executors
 
 - **Service names changed.** The Compose service `executor` is replaced by `executor-gpu` and `executor-cpu`. Update scripts, monitoring and any `docker-compose.override.yml` that name the old service. After upgrading, remove the old container:

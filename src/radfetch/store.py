@@ -15,6 +15,7 @@ from collections.abc import Iterable
 import psycopg
 from psycopg.types.json import Jsonb
 
+from radfetch import auth
 from radfetch.gateway.pacs import SeriesInfo
 
 Conn = psycopg.Connection
@@ -1186,7 +1187,9 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-_USER_COLUMNS = "id, username, role, grants, denies, allowed_flows, disabled, created_at, last_login_at"
+_USER_COLUMNS = (
+    "id, username, role, grants, denies, allowed_flows, disabled, created_at, last_login_at, sso, totp_enabled"
+)
 
 
 def create_user(
@@ -1198,12 +1201,15 @@ def create_user(
     denies: list[str] | None = None,
     allowed_flows: list[str] | None = None,
     by: str | None = None,
+    sso: bool = False,
 ) -> Row:
+    """`sso` marks an account that signs in through the identity provider; it is linked to the
+    person with that username at their first single sign-on."""
     with conn.transaction():
         user = conn.execute(
-            "insert into users (id, username, role, password_hash, grants, denies, allowed_flows)"
-            f" values (%s, %s, %s, %s, %s, %s, %s) returning {_USER_COLUMNS}",
-            (uuid.uuid4(), username, role, password_hash, grants or [], denies or [], allowed_flows),
+            "insert into users (id, username, role, password_hash, grants, denies, allowed_flows, sso)"
+            f" values (%s, %s, %s, %s, %s, %s, %s, %s) returning {_USER_COLUMNS}",
+            (uuid.uuid4(), username, role, password_hash, grants or [], denies or [], allowed_flows, sso),
         ).fetchone()
         log_event(conn, None, "user_created", username=username, role=role, by=by)
     return user
@@ -1267,22 +1273,36 @@ def _require_an_admin(conn: Conn) -> None:
         return
     ok = conn.execute(
         "select 1 from users u where not disabled and role = 'admin' and not ('users.manage' = any(denies))"
-        " and (password_hash is not null or exists"
+        " and (password_hash is not null or sso or exists"
         "      (select 1 from api_tokens t where t.user_id = u.id and t.revoked_at is null)) limit 1"
     ).fetchone()
     if ok is None:
         raise ValueError("this would leave no enabled administrator")
 
 
-def check_login(conn: Conn, username: str, verify, max_failures: int = 10, lock_minutes: int = 15) -> Row | None:
-    """Return the user when verify(password_hash) is true. Locks the account after repeated failures."""
+def check_login(
+    conn: Conn,
+    username: str,
+    verify,
+    code: str | None = None,
+    second_factor: bool = True,
+    max_failures: int = 10,
+    lock_minutes: int = 15,
+) -> tuple[Row | None, str]:
+    """Check a password sign-in. Returns (user, "ok"), or (None, reason) with reason "bad",
+    "mfa_required" (right password, the account has two-step sign-in, no code given) or "mfa_bad".
+
+    `verify(password_hash)` checks the password. `code` is an authenticator code or an unused
+    recovery code. Wrong passwords and wrong codes count towards locking the account.
+    """
     with conn.transaction():
         row = conn.execute("select * from users where username = %s for update", (username,)).fetchone()
         if row is None:
             verify(None)  # spend the same time as for a real user
-            return None
+            return None, "bad"
         locked = conn.execute("select %s > now() as locked", (row["locked_until"],)).fetchone()["locked"]
-        if row["disabled"] or locked or not verify(row["password_hash"]):
+
+        def failed(reason: str) -> tuple[None, str]:
             if not row["disabled"] and not locked:
                 conn.execute(
                     "update users set failed_logins = failed_logins + 1,"
@@ -1290,27 +1310,149 @@ def check_login(conn: Conn, username: str, verify, max_failures: int = 10, lock_
                     " where id = %s",
                     (max_failures, lock_minutes, row["id"]),
                 )
-            return None
+            return None, reason
+
+        if row["disabled"] or locked or not verify(row["password_hash"]):
+            return failed("bad")
+        if second_factor and row["totp_enabled"]:
+            if not code:
+                return None, "mfa_required"
+            step = auth.totp_verify(row["totp_secret"], code, row["totp_last_step"])
+            if step is not None:
+                conn.execute("update users set totp_last_step = %s where id = %s", (step, row["id"]))
+            elif auth.recovery_hash(code) in row["recovery_codes"]:
+                conn.execute(
+                    "update users set recovery_codes = array_remove(recovery_codes, %s) where id = %s",
+                    (auth.recovery_hash(code), row["id"]),
+                )
+                log_event(conn, None, "recovery_code_used", username=username)
+            else:
+                return failed("mfa_bad")
         conn.execute(
             "update users set failed_logins = 0, locked_until = null, last_login_at = now() where id = %s",
             (row["id"],),
         )
-    return get_user(conn, username)
+    return get_user(conn, username), "ok"
 
 
-def create_session(conn: Conn, user_id: uuid.UUID, hours: float) -> str:
+def totp_begin(conn: Conn, username: str) -> str:
+    """Start (or restart) setting up two-step sign-in. It takes effect only once confirmed with a code."""
+    secret = auth.totp_new_secret()
+    conn.execute(
+        "update users set totp_secret = %s, totp_enabled = false, totp_last_step = null where username = %s",
+        (secret, username),
+    )
+    return secret
+
+
+def totp_confirm(conn: Conn, username: str, code: str) -> list[str] | None:
+    """Turn two-step sign-in on if the code is right. Returns the recovery codes, shown once."""
+    with conn.transaction():
+        row = conn.execute(
+            "select id, totp_secret from users where username = %s and not totp_enabled for update", (username,)
+        ).fetchone()
+        step = auth.totp_verify(row["totp_secret"], code, None) if row else None
+        if step is None:
+            return None
+        codes = auth.new_recovery_codes()
+        conn.execute(
+            "update users set totp_enabled = true, totp_last_step = %s, recovery_codes = %s where id = %s",
+            (step, [auth.recovery_hash(c) for c in codes], row["id"]),
+        )
+        log_event(conn, None, "mfa_enabled", username=username)
+    return codes
+
+
+def totp_disable(conn: Conn, username: str, by: str | None = None) -> bool:
+    with conn.transaction():
+        cur = conn.execute(
+            "update users set totp_enabled = false, totp_secret = null, totp_last_step = null, recovery_codes = '{}'"
+            " where username = %s and (totp_enabled or totp_secret is not null)",
+            (username,),
+        )
+        if cur.rowcount:
+            log_event(conn, None, "mfa_removed", username=username, by=by)
+        return cur.rowcount == 1
+
+
+def save_oidc_login(conn: Conn, state: str, nonce: str, verifier: str) -> None:
+    conn.execute("delete from oidc_logins where created_at < now() - interval '1 hour'")
+    conn.execute("insert into oidc_logins (state, nonce, verifier) values (%s, %s, %s)", (state, nonce, verifier))
+
+
+def take_oidc_login(conn: Conn, state: str, max_age_s: float = 600) -> Row | None:
+    """Fetch and delete a sign-in in progress: a state value works once, and only for a few minutes."""
+    return conn.execute(
+        "delete from oidc_logins where state = %s and created_at > now() - make_interval(secs => %s)"
+        " returning nonce, verifier",
+        (state, max_age_s),
+    ).fetchone()
+
+
+def sso_sign_in(
+    conn: Conn, subject: str, username: str, mapped_role: str | None, default_role: str | None
+) -> Row:
+    """Find or create the account for a person the identity provider has authenticated.
+
+    - An account already linked to this subject is used, whatever its username is now.
+    - Otherwise an account created for single sign-on with this username is linked.
+    - Otherwise a new account is created, if a role follows from the person's groups or a
+      default role is configured. A password account or service account with the same
+      username is never taken over.
+    `mapped_role` (from the provider's groups) replaces the account's role when given.
+    Raises ValueError with a reason code when the person may not sign in.
+    """
+    with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(727002)")
+        row = conn.execute("select * from users where oidc_subject = %s for update", (subject,)).fetchone()
+        if row is None:
+            row = conn.execute("select * from users where username = %s for update", (username,)).fetchone()
+            if row is not None:
+                if not row["sso"] or row["oidc_subject"] is not None:
+                    raise ValueError("username_taken")
+                conn.execute("update users set oidc_subject = %s where id = %s", (subject, row["id"]))
+                log_event(conn, None, "sso_linked", username=username)
+            else:
+                role = mapped_role or default_role
+                if not role:
+                    raise ValueError("not_authorized")
+                create_user(conn, username, role, sso=True, by="sso")
+                conn.execute("update users set oidc_subject = %s where username = %s", (subject, username))
+                row = conn.execute("select * from users where username = %s", (username,)).fetchone()
+        if row["disabled"]:
+            raise ValueError("disabled")
+        if mapped_role and mapped_role != row["role"]:
+            try:
+                with conn.transaction():
+                    conn.execute("update users set role = %s where id = %s", (mapped_role, row["id"]))
+                    if row["role"] == "admin":
+                        _require_an_admin(conn)
+                log_event(
+                    conn, None, "user_changed", username=row["username"], changes={"role": mapped_role}, by="sso"
+                )
+            except ValueError:
+                # The provider's groups would demote the only administrator. Keep the role:
+                # a system nobody can administer is worse than a role that lags the directory.
+                log_event(conn, None, "sso_demotion_skipped", username=row["username"], wanted=mapped_role)
+        conn.execute("update users set last_login_at = now() where id = %s", (row["id"],))
+        return get_user(conn, row["username"])
+
+
+def create_session(conn: Conn, user_id: uuid.UUID, hours: float, sso: bool = False) -> str:
     token = secrets.token_urlsafe(32)
     conn.execute("delete from sessions where expires_at < now()")
     conn.execute(
-        "insert into sessions (token_hash, user_id, expires_at) values (%s, %s, now() + make_interval(secs => %s * 3600.0))",
-        (_token_hash(token), user_id, hours),
+        "insert into sessions (token_hash, user_id, sso, expires_at)"
+        " values (%s, %s, %s, now() + make_interval(secs => %s * 3600.0))",
+        (_token_hash(token), user_id, sso, hours),
     )
     return token
 
 
 def user_for_session(conn: Conn, token: str) -> Row | None:
     return conn.execute(
-        f"select {', '.join('u.' + c.strip() for c in _USER_COLUMNS.split(','))} from sessions s"
+        f"select {', '.join('u.' + c.strip() for c in _USER_COLUMNS.split(','))}, s.sso as session_sso,"
+        " u.password_hash is not null as has_password from sessions s"
         " join users u on u.id = s.user_id where s.token_hash = %s and s.expires_at > now() and not u.disabled",
         (_token_hash(token),),
     ).fetchone()

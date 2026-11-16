@@ -34,8 +34,9 @@ docker compose exec -T api radfetch batch "March cohort" example /dev/stdin < ac
 
 | Command | Does |
 |---|---|
-| `user create <name> [--role R] [--flows a,b] [--service-account] [--password-stdin]` | Create an account. Prints a generated password once |
+| `user create <name> [--role R] [--flows a,b] [--sso] [--service-account] [--password-stdin]` | Create an account. Prints a generated password once |
 | `user set <name> [--role R] [--grant P] [--deny P] [--clear-adjustments] [--flows a,b] [--all-flows] [--disable] [--enable]` | Change role, individual permissions, flow restriction, or disable |
+| `user reset-mfa <name>` | Remove a user's two-step sign-in, e.g. after a lost phone |
 | `user passwd <name> [--password-stdin]` | Set a new password and sign the user out everywhere |
 | `user list`, `user delete <name>`, `user roles` | List accounts, delete one, show roles and permissions |
 | `token create <username> [--name label]` | Create an API token for an account and print it once |

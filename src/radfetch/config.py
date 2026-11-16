@@ -106,6 +106,37 @@ class Settings(BaseSettings):
     api_token: str | None = None
     # How long a sign-in in the web UI lasts.
     session_hours: float = 12
+    # Password accounts must set up two-step sign-in (an authenticator app) before they can do anything.
+    require_mfa: bool = False
+
+    # --- Single sign-on (OpenID Connect) -----------------------------------------
+    # Issuer URL of the identity provider; its /.well-known/openid-configuration is read from there.
+    # Setting it turns single sign-on on. public_url must be set too: the provider sends people
+    # back to <public_url>/auth/oidc/callback.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str | None = None
+    oidc_scopes: str = "openid profile email"
+    oidc_button_label: str = "Sign in with single sign-on"
+    # Which claim becomes the username, and which lists the person's groups.
+    oidc_username_claim: str = "preferred_username"
+    oidc_groups_claim: str = "groups"
+    # JSON object mapping a group to a role, e.g. {"radfetch-admins": "admin", "radiology": "viewer"}.
+    # With several matches the highest role wins. When set, the role is taken from the
+    # provider at every sign-in.
+    oidc_role_map: str = ""
+    # Role for people who match no group. Empty: they are refused, unless an administrator
+    # created an account for them beforehand.
+    oidc_default_role: str = ""
+    # Refuse single sign-on unless the provider says a second factor was used: a value that must
+    # be in the token's "amr" claim (usually "mfa"), and/or an exact "acr" value.
+    oidc_require_amr: str = ""
+    oidc_require_acr: str = ""
+    # Sent to the provider as acr_values, to ask for that level of sign-in.
+    oidc_acr_values: str = ""
+    # Whether password sign-in stays available next to single sign-on. Keep at least one
+    # password administrator for when the provider is down.
+    password_login: bool = True
 
     # --- Notifications --------------------------------------------------------
     # POST a JSON message here when a one-off or pushed job fails, a batch finishes, or the
