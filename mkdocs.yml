@@ -1,0 +1,52 @@
+site_name: RadFetch
+site_description: Containerized workflows on studies from a clinical PACS, without overloading it
+site_url: https://mathiser.github.io/RadFetch/
+repo_url: https://github.com/mathiser/RadFetch
+repo_name: mathiser/RadFetch
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle: { icon: material/brightness-7, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle: { icon: material/brightness-4, name: Switch to light mode }
+
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: README.md
+  - Getting started:
+      - Concepts: concepts.md
+      - Tutorial: tutorial.md
+      - Installation: installation.md
+  - Setting up:
+      - Connecting a PACS: pacs.md
+      - Writing flows: flows.md
+      - Configuration reference: configuration.md
+  - Running it:
+      - Administration: administration.md
+      - Users and permissions: users.md
+      - High availability: high-availability.md
+      - Troubleshooting: troubleshooting.md
+  - Reference:
+      - API: api.md
+      - Command line: cli.md
+      - Development: development.md
