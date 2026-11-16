@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from radfetch.gateway.pacs import SeriesInfo
 
@@ -89,6 +89,26 @@ class Trigger(BaseModel):
 Destination = Annotated[Union[DicomDestination, DirectoryDestination, StowDestination], Field(discriminator="type")]
 
 
+SERIES = "series"  # the input name for the DICOM series fetched or received for the job
+
+
+class Step(BaseModel):
+    """One container in a flow. Its output folder can be an input of later steps."""
+
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    image: str
+    command: list[str] | None = None  # overrides the image's default command
+    gpu: bool = False
+    timeout_s: int | None = None  # default: the flow's timeout_s
+    max_attempts: int | None = None  # default: the flow's max_attempts
+    env: dict[str, str] = {}
+    mem_limit: str | None = None
+    shm_size: str | None = None
+    # What the container gets to read, and where: "series" for the DICOM series, or the
+    # name of another step for that step's output folder. Everything is mounted read-only.
+    inputs: dict[str, str] = {SERIES: "/input"}
+
+
 class Flow(BaseModel):
     name: str
     version: str = "1"
@@ -98,20 +118,92 @@ class Flow(BaseModel):
     # What to do when an accession number maps to several studies.
     # fail: fail the job. all: run once on the matching series of all of them.
     multiple_studies: Literal["fail", "all"] = "fail"
-    image: str
-    command: list[str] | None = None  # overrides the image's default command
+
+    # Either one container, given directly here...
+    image: str | None = None
+    command: list[str] | None = None
     gpu: bool = False
-    timeout_s: int = 3600
-    env: dict[str, str] = {}
     mem_limit: str | None = None
     shm_size: str | None = None
+    # ...or several, as steps. A step reads the series and/or the output of other steps.
+    steps: list[Step] = []
+    # Steps whose output is delivered and whose results file is stored. Default: the last step.
+    deliver: list[str] | None = None
+    results_from: str | None = None
+
+    # Defaults for every step.
+    timeout_s: int = 3600
+    env: dict[str, str] = {}
     max_attempts: int = 2
+
     destinations: list[Destination] = []
     # A JSON file the container may write under /output with structured results (measurements,
     # scores, labels...). It is stored with the job and can be queried and exported.
     results_file: str = "results.json"
     # Without a trigger the flow only runs when a job is submitted for it.
     trigger: Trigger | None = None
+
+    @model_validator(mode="after")
+    def _check_steps(self) -> "Flow":
+        if self.steps and self.image:
+            raise ValueError("give either image (one container) or steps (several), not both")
+        if not self.steps:
+            if not self.image:
+                raise ValueError("a flow needs an image, or steps")
+            self.steps = [
+                Step(name="main", image=self.image, command=self.command, gpu=self.gpu,
+                     mem_limit=self.mem_limit, shm_size=self.shm_size)
+            ]
+        names = [s.name for s in self.steps]
+        if len(set(names)) != len(names):
+            raise ValueError("step names must be unique")
+        if SERIES in names:
+            raise ValueError(f"a step cannot be named {SERIES!r}")
+        for step in self.steps:
+            paths = list(step.inputs.values())
+            for source, path in step.inputs.items():
+                if source != SERIES and source not in names:
+                    raise ValueError(f"step {step.name}: unknown input {source!r}")
+                if source == step.name:
+                    raise ValueError(f"step {step.name} cannot read its own output")
+                if not path.startswith("/") or path.rstrip("/") == "" or path.rstrip("/") == "/output" \
+                        or path.startswith("/output/"):
+                    raise ValueError(f"step {step.name}: {path!r} is not a usable mount path")
+            if len(set(paths)) != len(paths):
+                raise ValueError(f"step {step.name}: two inputs share a mount path")
+        self.ordered_steps()  # raises on a cycle
+        for name in [*(self.deliver or []), *([self.results_from] if self.results_from else [])]:
+            if name not in names:
+                raise ValueError(f"unknown step {name!r} in deliver or results_from")
+        return self
+
+    def ordered_steps(self) -> list[Step]:
+        """Steps in an order where each comes after the steps it reads from (file order where possible)."""
+        done: list[Step] = []
+        remaining = list(self.steps)
+        while remaining:
+            ready = [s for s in remaining
+                     if all(src == SERIES or src in {d.name for d in done} for src in s.inputs)]
+            if not ready:
+                raise ValueError("steps depend on each other in a circle: " + ", ".join(s.name for s in remaining))
+            done.append(ready[0])
+            remaining.remove(ready[0])
+        return done
+
+    def step(self, name: str) -> Step | None:
+        return next((s for s in self.steps if s.name == name), None)
+
+    def timeout_for(self, step: Step) -> int:
+        return step.timeout_s or self.timeout_s
+
+    def attempts_for(self, step: Step) -> int:
+        return step.max_attempts or self.max_attempts
+
+    def delivered_steps(self) -> list[str]:
+        return self.deliver if self.deliver is not None else [self.ordered_steps()[-1].name]
+
+    def result_step(self) -> str:
+        return self.results_from or self.ordered_steps()[-1].name
 
     def select_series(self, series: list[SeriesInfo]) -> list[SeriesInfo]:
         matched = [s for s in series if any(rule.matches(s) for rule in self.select)]

@@ -98,9 +98,9 @@ def cancel_job(conn: Conn, job_id: uuid.UUID, by: str | None = None) -> bool:
 def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False, by: str | None = None) -> str | None:
     """Give a failed or cancelled job another go. Returns the state it restarts from, or None if not retryable.
 
-    When only delivery failed and the run's output is still wanted, the job goes back
-    to 'sending' and inference is not repeated. Otherwise (or with full=True) it
-    starts over from 'queued' with fresh attempt budgets.
+    When only delivery failed, the job goes back to 'sending' and nothing is run again.
+    Otherwise it goes back to 'queued' with fresh attempt budgets and continues at the
+    step that failed; steps that already succeeded are kept. full=True runs every step again.
     """
     with conn.transaction():
         job = conn.execute(
@@ -110,23 +110,23 @@ def retry_job(conn: Conn, job_id: uuid.UUID, full: bool = False, by: str | None 
             return None
         resend = None
         if not full:
+            # Deliveries exist only once every step has succeeded, so a failed one means only sending failed.
             resend = conn.execute(
-                "select r.id from runs r where r.job_id = %s and r.state = 'succeeded'"
-                " and r.attempt = (select max(attempt) from runs where job_id = %s)"
-                " and exists (select 1 from deliveries d where d.run_id = r.id and d.state = 'failed')",
-                (job_id, job_id),
+                "select 1 from deliveries where job_id = %s and state = 'failed' limit 1", (job_id,)
             ).fetchone()
         if resend:
             conn.execute(
                 "update deliveries set state = 'pending', attempts = 0, not_before = now(), error = null,"
-                " lease_owner = null, lease_expires_at = null where run_id = %s and state = 'failed'",
-                (resend["id"],),
+                " lease_owner = null, lease_expires_at = null where job_id = %s and state = 'failed'",
+                (job_id,),
             )
             state = "sending"
         else:
             conn.execute("delete from deliveries where job_id = %s", (job_id,))
             # job_series stays, so the cached series stay protected until the job is resolved again.
             state = "queued"
+            if full:
+                conn.execute("update jobs set rerun_from = now() where id = %s", (job_id,))
         conn.execute(
             "update jobs set state = %s, error = null, attempts = 0, not_before = now(), retried_at = now(),"
             " lease_owner = null, lease_expires_at = null, updated_at = now() where id = %s",
@@ -513,20 +513,38 @@ def latest_run(conn: Conn, job_id: uuid.UUID) -> Row | None:
     ).fetchone()
 
 
-def create_run(conn: Conn, job_id: uuid.UUID, image: str) -> Row:
+def create_run(conn: Conn, job_id: uuid.UUID, image: str, step: str = "main") -> Row:
     with conn.transaction():
         run = conn.execute(
-            "insert into runs (id, job_id, attempt, image)"
-            " values (%s, %s, (select coalesce(max(attempt), 0) + 1 from runs where job_id = %s), %s) returning *",
-            (uuid.uuid4(), job_id, job_id, image),
+            "insert into runs (id, job_id, attempt, image, step)"
+            " values (%s, %s, (select coalesce(max(attempt), 0) + 1 from runs where job_id = %s), %s, %s) returning *",
+            (uuid.uuid4(), job_id, job_id, image, step),
         ).fetchone()
         conn.execute(
             "update retrievals set last_used_at = now() where series_instance_uid in"
             " (select series_instance_uid from job_series where job_id = %s)",
             (job_id,),
         )
-        log_event(conn, job_id, "run_started", run=str(run["id"]), attempt=run["attempt"], image=image)
+        log_event(conn, job_id, "run_started", run=str(run["id"]), attempt=run["attempt"], image=image,
+                  **({} if step == "main" else {"step": step}))
     return run
+
+
+def step_succeeded(conn: Conn, job_id: uuid.UUID, run_id: uuid.UUID, step: str) -> None:
+    with conn.transaction():
+        finish_run(conn, run_id, "succeeded", 0)
+        log_event(conn, job_id, "run_succeeded", run=str(run_id), **({} if step == "main" else {"step": step}))
+
+
+def succeeded_steps(conn: Conn, job_id: uuid.UUID) -> dict[str, uuid.UUID]:
+    """step name -> its latest successful run, ignoring runs from before a full retry."""
+    rows = conn.execute(
+        "select distinct on (r.step) r.step, r.id from runs r join jobs j on j.id = r.job_id"
+        " where r.job_id = %s and r.state = 'succeeded' and r.started_at >= coalesce(j.rerun_from, '-infinity')"
+        " order by r.step, r.attempt desc",
+        (job_id,),
+    ).fetchall()
+    return {row["step"]: row["id"] for row in rows}
 
 
 def set_run_image_digest(conn: Conn, run_id: uuid.UUID, digest: str | None) -> None:
@@ -535,7 +553,7 @@ def set_run_image_digest(conn: Conn, run_id: uuid.UUID, digest: str | None) -> N
 
 def job_runs(conn: Conn, job_id: uuid.UUID) -> list[Row]:
     return conn.execute(
-        "select id, attempt, state, image, image_digest, exit_code, error, started_at, finished_at"
+        "select id, attempt, step, state, image, image_digest, exit_code, error, started_at, finished_at"
         " from runs where job_id = %s order by attempt",
         (job_id,),
     ).fetchall()
@@ -545,7 +563,7 @@ def run_manifest(conn: Conn, run_id: uuid.UUID) -> dict[str, Any]:
     """Everything needed to say later what produced a result: inputs, flow version and exact image."""
     row = conn.execute(
         "select j.id as job_id, j.accession_number, j.study_instance_uid, j.flow, j.flow_version, j.source,"
-        " j.requested_by, r.id as run_id, r.attempt, r.image, r.image_digest, r.started_at"
+        " j.requested_by, r.id as run_id, r.step, r.attempt, r.image, r.image_digest, r.started_at"
         " from runs r join jobs j on j.id = r.job_id where r.id = %s",
         (run_id,),
     ).fetchone()
@@ -554,7 +572,13 @@ def run_manifest(conn: Conn, run_id: uuid.UUID) -> dict[str, Any]:
         " from job_series js join retrievals r using (series_instance_uid) where js.job_id = %s order by 1",
         (row["job_id"],),
     ).fetchall()
-    return {**row, "input_series": series}
+    steps = conn.execute(
+        "select distinct on (r.step) r.step, r.id as run_id, r.image, r.image_digest, r.finished_at from runs r"
+        " join jobs j on j.id = r.job_id where r.job_id = %s and r.state = 'succeeded'"
+        " and r.started_at >= coalesce(j.rerun_from, '-infinity') order by r.step, r.attempt desc",
+        (row["job_id"],),
+    ).fetchall()
+    return {**row, "input_series": series, "steps": steps}
 
 
 def promote_ready_jobs(conn: Conn) -> int:
@@ -585,44 +609,44 @@ def finish_run(conn: Conn, run_id: uuid.UUID, state: str, exit_code: int | None 
 def run_succeeded(
     conn: Conn,
     job_id: uuid.UUID,
-    run_id: uuid.UUID,
     owner: str,
-    destinations: list[dict],
+    deliveries: list[tuple[uuid.UUID, dict]],
+    result_run_id: uuid.UUID | None = None,
     result: Any = None,
     result_problem: str | None = None,
 ) -> bool:
-    """running -> sending (one delivery per destination), or -> done when there is nowhere to send.
+    """Every step succeeded: running -> sending, or -> done when there is nothing to deliver.
 
-    `result` is the flow's structured result document, stored with the job in the same
-    transaction; `result_problem` says why a result file was not stored.
+    `deliveries` pairs the run whose output is sent with a destination. `result` is the
+    flow's structured result document, stored in the same transaction; `result_problem`
+    says why a result file was not stored.
     """
     with conn.transaction():
         cur = conn.execute(
             "update jobs set state = %s, error = null, lease_owner = null, lease_expires_at = null, updated_at = now()"
             " where id = %s and state = 'running' and lease_owner = %s",
-            ("sending" if destinations else "done", job_id, owner),
+            ("sending" if deliveries else "done", job_id, owner),
         )
         if cur.rowcount == 0:
             return False
-        finish_run(conn, run_id, "succeeded", 0)
-        for dest in destinations:
+        conn.execute("delete from deliveries where job_id = %s", (job_id,))  # from before a rerun
+        for run_id, dest in deliveries:
             conn.execute(
                 "insert into deliveries (id, job_id, run_id, destination) values (%s, %s, %s, %s)",
                 (uuid.uuid4(), job_id, run_id, Jsonb(dest)),
             )
-        log_event(conn, job_id, "run_succeeded", run=str(run_id))
         if result is not None:
             conn.execute(
                 "insert into results (job_id, run_id, flow, flow_version, data)"
                 " select j.id, %s, j.flow, j.flow_version, %s from jobs j where j.id = %s"
                 " on conflict (job_id) do update set run_id = excluded.run_id, flow_version = excluded.flow_version,"
                 " data = excluded.data, created_at = now()",
-                (run_id, Jsonb(result), job_id),
+                (result_run_id, Jsonb(result), job_id),
             )
-            log_event(conn, job_id, "result_stored", run=str(run_id))
+            log_event(conn, job_id, "result_stored", run=str(result_run_id))
         elif result_problem:
-            log_event(conn, job_id, "result_rejected", run=str(run_id), reason=result_problem)
-        if not destinations:
+            log_event(conn, job_id, "result_rejected", run=str(result_run_id), reason=result_problem)
+        if not deliveries:
             log_event(conn, job_id, "done")
     return True
 
@@ -690,12 +714,13 @@ def delete_run(conn: Conn, run_id: uuid.UUID) -> None:
     conn.execute("delete from runs where id = %s", (run_id,))
 
 
-def count_runs(conn: Conn, job_id: uuid.UUID) -> int:
-    """Run attempts since the job was created or last retried by hand."""
+def count_runs(conn: Conn, job_id: uuid.UUID, step: str | None = None) -> int:
+    """Run attempts (of one step, if given) since the job was created or last retried by hand."""
     return conn.execute(
         "select count(*) as n from runs r join jobs j on j.id = r.job_id"
-        " where r.job_id = %s and r.started_at >= coalesce(j.retried_at, '-infinity')",
-        (job_id,),
+        " where r.job_id = %(job)s and r.started_at >= coalesce(j.retried_at, '-infinity')"
+        " and (%(step)s::text is null or r.step = %(step)s)",
+        {"job": job_id, "step": step},
     ).fetchone()["n"]
 
 

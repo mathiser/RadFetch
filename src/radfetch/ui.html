@@ -369,7 +369,7 @@ const VIEWS = {
         if (j.study_instance_uid) lines.push(`study ${j.study_instance_uid}`);
         lines.push("");
         for (const e of j.events) lines.push(`${when(e.at)}  ${e.kind}${Object.keys(e.detail).length ? "  " + JSON.stringify(e.detail) : ""}`);
-        for (const r of j.runs) { lines.push("", `run ${r.attempt}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`); if (r.image_digest) lines.push(`  image ${r.image_digest}`); }
+        for (const r of j.runs) { lines.push("", `run ${r.attempt}${r.step && r.step !== "main" ? " (step " + r.step + ")" : ""}: ${r.state}${r.exit_code != null ? " (exit " + r.exit_code + ")" : ""}  ${r.image}`); if (r.image_digest) lines.push(`  image ${r.image_digest}`); }
         if (can("results.view")) {
           try { const r = await api(`/jobs/${j.id}/result`); lines.push("", "result reported by the flow:", JSON.stringify(r.data, null, 2)); } catch {}
         }

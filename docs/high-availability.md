@@ -54,6 +54,25 @@ a standby, which refuses data it did not ask for; the retrieval then fails and
 is retried. Prefer `get` or `dicomweb` mode in a cluster, or publish port 11113
 in host mode and run the gateway on one fixed node.
 
+## How flow containers run in a cluster
+
+Flow containers are **not** Swarm services. The executor is a Swarm service (one
+per GPU node), and it starts each flow container as an ordinary container on its
+own node, through that node's Docker socket. This is the same "sibling container"
+arrangement as on a single host.
+
+What follows from that:
+
+- **Swarm does not see or reschedule flow containers.** They do not appear in `docker service ls`. RadFetch itself tracks them (each carries a `radfetch.run_id` label) and recovers through its leases.
+- **A job runs on the node of the executor that took it**, including every step of a multi-step flow. GPU nodes are chosen by labelling them, not per job.
+- **GPUs work as on a single host**, through the NVIDIA Container Toolkit on the node. This is the main reason for not using Swarm services: Swarm has no equivalent of handing a service task a GPU on request.
+- **The data folder must be at the same path on every node**, because the bind mounts are resolved by the node's own Docker daemon.
+- **The Docker socket is root-equivalent** on each GPU node, as on a single host.
+
+Running flow containers as scheduled cluster jobs instead (Swarm jobs or
+Kubernetes Jobs) would need another implementation of the `Runtime` interface;
+see [Development](development.md).
+
 ## Docker Swarm
 
 `deploy/swarm-stack.yml` is an example stack. Before deploying:

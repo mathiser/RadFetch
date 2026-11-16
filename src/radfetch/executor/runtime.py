@@ -16,8 +16,12 @@ class ContainerSpec:
     run_id: str
     job_id: str
     image: str
-    input_dir: Path  # mounted read-only at /input
+    input_dir: Path | None  # the job's series, mounted read-only at input_path; None if the step does not read them
     output_dir: Path  # mounted read-write at /output
+    input_path: str = "/input"
+    # Output folders of earlier steps, mounted read-only: container path -> host folder
+    extra_inputs: dict[str, Path] = field(default_factory=dict)
+    step: str = "main"
     command: list[str] | None = None
     env: dict[str, str] = field(default_factory=dict)
     gpu: bool = False

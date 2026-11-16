@@ -34,7 +34,8 @@ Both paths end in the same place: series in the local cache and a job ready for 
 - **One-off job**: a single job submitted for immediate attention. It goes ahead of batch work.
 - **Batch**: a named list of accession numbers for one flow. Batches can be paused, resumed and cancelled as a whole.
 - **Retrieval**: one series in the local cache. Several jobs can share one retrieval, so a series is fetched once however many flows use it.
-- **Run**: one execution of a flow's container for a job. A job can have several runs if one fails and is retried.
+- **Step**: one container in a flow. Most flows have one; a flow can chain several, each reading the output of earlier ones.
+- **Run**: one execution of a step's container for a job. A job has several runs if its flow has several steps, or if one fails and is retried.
 - **Delivery**: sending one run's output to one destination.
 
 ## Job states

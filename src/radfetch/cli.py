@@ -257,7 +257,8 @@ def check_flows():
     for name in list_flows(settings.flows_dir):
         try:
             flow = load_flow(settings.flows_dir, name)
-            typer.echo(f"ok    {name} (version {flow.version}, image {flow.image})")
+            steps = ", ".join(f"{st.name}: {st.image}" if len(flow.steps) > 1 else st.image for st in flow.ordered_steps())
+            typer.echo(f"ok    {name} (version {flow.version}, {'steps ' if len(flow.steps) > 1 else 'image '}{steps})")
         except FlowError as exc:
             bad += 1
             typer.echo(f"error {exc}", err=True)

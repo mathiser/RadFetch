@@ -27,7 +27,8 @@ docker compose logs --tail 100 gateway executor sender scp
 | `cannot start container: …` | Docker could not start the flow's container | See "Containers do not start" below |
 | `container exited with code N` | The flow's program failed | Read the container log (below) |
 | `timed out after Ns` | The run exceeded the flow's `timeout_s` | Raise `timeout_s` or look at why the run is slow |
-| `gave up after N run attempts` | Every allowed run failed | Fix the cause, then retry the job |
+| `gave up after N run attempts` / `gave up after N attempts of step …` | Every allowed run of that step failed | Fix the cause, then retry the job; it continues at that step |
+| `step NAME: …` | The error is from that step of a multi-step flow | As for the error after the step name |
 | `delivery failed: …` | A destination kept refusing the results | Fix the destination, then retry: only the delivery is repeated |
 | `delivery failed: run produced no DICOM files` | A `dicom` or `stow` destination found nothing to send | The flow's container must write DICOM files to `/output` |
 | `delivery failed: run output directory is missing` | The run files were already cleaned up | Retry with a full rerun: `radfetch retry <job id> --full` |

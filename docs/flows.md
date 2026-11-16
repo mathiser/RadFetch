@@ -80,6 +80,7 @@ Environment variables set for every run:
 | Variable | Value |
 |---|---|
 | `RADFETCH_JOB_ID`, `RADFETCH_RUN_ID` | Identifiers of the job and this run |
+| `RADFETCH_STEP` | The step's name (`main` for a single-container flow) |
 | `RADFETCH_ACCESSION_NUMBER` | The accession number |
 | `RADFETCH_STUDY_INSTANCE_UID` | The study (the first by UID when there are several) |
 | `RADFETCH_FLOW` | The flow name |
@@ -122,6 +123,61 @@ separately, and a failed delivery never repeats inference.
 
 Every successful run also gets a `radfetch.json` in its output, recording the
 job, flow version, exact image digest and input series.
+
+## Several containers in one flow
+
+A flow can run several containers, each reading the DICOM series, the output of
+earlier containers, or both. Replace `image` with `steps`:
+
+```yaml
+name: lung-pipeline
+select:
+  - modality: CT
+    series_description: "(?i)thorax"
+
+steps:
+  - name: segment
+    image: registry.example/lung-seg@sha256:4f0c...
+    gpu: true
+    # no inputs given: the series are mounted at /input
+
+  - name: measure
+    image: registry.example/measure@sha256:91ab...
+    inputs:
+      series: /dicom        # the DICOM series
+      segment: /masks       # everything the step "segment" wrote to /output
+
+  - name: report
+    image: registry.example/report@sha256:c07d...
+    inputs:
+      measure: /measurements   # this step does not need the DICOM at all
+
+deliver: [report, segment]     # whose /output is sent to the destinations
+results_from: measure          # whose results.json is stored
+destinations:
+  - type: dicom
+    host: pacs.hospital.example
+    port: 104
+    ae_title: PACS
+```
+
+How it works:
+
+- **Wiring.** `inputs` maps a source to a path inside the container. The source is `series` for the DICOM series, or the name of another step for that step's whole `/output` folder. Everything is mounted read-only; each step writes to its own `/output`.
+- **Order.** A step runs after every step it reads from. The order in the file does not matter, and a circular dependency is rejected when the flow is loaded.
+- **One at a time.** Steps of a job run one after another on the executor that took the job. Independent steps are not run in parallel, since one executor means one GPU.
+- **Failures.** If a step fails, only that step is retried (up to its `max_attempts`); the outputs of the steps before it are kept. Retrying a failed job by hand also continues at the failed step. `radfetch retry <job> --full` runs every step again.
+- **Delivery and results.** By default the last step's output is delivered and its `results.json` is stored. `deliver` and `results_from` change that. With several delivered steps, a `directory` destination gets one subfolder per step.
+- **Per step** you can set `image`, `command`, `gpu`, `env`, `timeout_s`, `max_attempts`, `mem_limit` and `shm_size`. The flow's `timeout_s`, `max_attempts` and `env` are the defaults.
+- **Traceability.** Each step is a run of its own in the job's history, with its image digest and log, and `radfetch.json` lists every step.
+
+A flow written with a single `image` is the same thing as a flow with one step
+named `main`.
+
+Coming from RadDeploy: a RadDeploy flow's list of models with named input and
+output mounts corresponds to `steps` with `inputs`. The difference is that a step
+has exactly one output folder, named after the step, instead of several named
+output mounts.
 
 ## Reporting results
 

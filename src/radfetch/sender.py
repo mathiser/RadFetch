@@ -29,6 +29,9 @@ class DeliveryError(Exception):
 
 def send_directory(out_dir: Path, dest: dict, job_id: str) -> None:
     target = Path(dest["path"]) / job_id
+    if dest.get("subfolder"):
+        target = target / dest["subfolder"]
+        target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".partial")
     shutil.rmtree(tmp, ignore_errors=True)
     shutil.rmtree(target, ignore_errors=True)

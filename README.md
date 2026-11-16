@@ -48,7 +48,7 @@ Open http://localhost:8000, submit accession number `ACC0001` with the flow
 - Push ingress: studies sent by C-STORE start flows whose trigger matches
 - Retrieval by C-GET, C-MOVE or DICOMweb, fetching only the series a flow selects, each once
 - PACS protection: single association, rate budget, batch windows, bounded preloading, disk watermarks, circuit breaker
-- Flow containers run through Docker with read-only input, no network and optional GPU
+- Flows of one or several containers, chained by mounting one step's output into the next; run through Docker with read-only inputs, no network and optional GPU
 - Delivery by C-STORE, STOW-RS or to a directory, retried independently of inference
 - Web interface with dashboards, HTTP API, Prometheus metrics, webhook notifications
 - User accounts with five roles, individually adjustable permissions and per-flow restrictions; audit log

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the Compose stack against the fake PACS.
-# Runs a gpu flow with RADFETCH_DEBUG_FAKE_GPU, so it works on hosts without a GPU.
+# Runs a two-step flow (one step a gpu step under RADFETCH_DEBUG_FAKE_GPU), so it works on hosts without a GPU.
 # Usage: scripts/smoke.sh        (set SMOKE_NO_BUILD=1 to reuse an existing radfetch:local image)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,9 +31,15 @@ name: smoke
 select:
   - modality: CT
     min_instances: 5
-image: busybox:1.36
-command: ["sh", "-c", "test \"$RADFETCH_FAKE_GPU\" = 1 && find /input -type f | wc -l > /output/count.txt"]
-gpu: true
+steps:
+  - name: count
+    image: busybox:1.36
+    gpu: true
+    command: ["sh", "-c", "test \"$RADFETCH_FAKE_GPU\" = 1 && find /input -type f | wc -l > /output/count.txt"]
+  - name: report
+    image: busybox:1.36
+    inputs: {count: /counted}
+    command: ["sh", "-c", "cp /counted/count.txt /output/count.txt && echo \"{\\\"instances\\\": $(cat /counted/count.txt)}\" > /output/results.json"]
 destinations:
   - type: directory
     path: /data/results
@@ -58,4 +64,6 @@ case "$jobs" in *'"done":4'*) ;; *) echo "timed out waiting for 4 done jobs" >&2
 
 results=$(docker run --rm -v "$PWD/data:/data:ro" busybox:1.36 sh -c 'cat /data/results/*/count.txt' | sort | uniq -c | xargs)
 [ "$results" = "4 12" ] || { echo "unexpected results: $results" >&2; exit 1; }
-echo "smoke test passed: 4 jobs done, each container saw 12 instances with the fake GPU"
+stored=$(api "http://localhost:8000/results?flow=smoke" | grep -o '"instances":12' | wc -l | xargs)
+[ "$stored" = "4" ] || { echo "expected 4 stored results, found $stored" >&2; exit 1; }
+echo "smoke test passed: 4 jobs done through a two-step flow with the fake GPU, results stored"

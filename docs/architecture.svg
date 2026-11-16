@@ -78,7 +78,7 @@
 
   <rect class="cont" x="735" y="160" width="200" height="84" rx="8"/>
   <text class="h" x="835" y="186" text-anchor="middle">flow container</text>
-  <text class="p" x="835" y="206" text-anchor="middle">/input → your model → /output</text>
+  <text class="p" x="835" y="206" text-anchor="middle">/input → one or more steps → /output</text>
   <text class="p" x="835" y="224" text-anchor="middle">Docker · no network · GPU</text>
 
   <!-- services, middle row -->

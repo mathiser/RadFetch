@@ -36,7 +36,7 @@ Jobs and batches of flows an account is not allowed to see behave as if they did
 | `GET /jobs?state=&batch_id=&search=&limit=` | `jobs.view` (`search` also `identifiers.view`) | List jobs, newest first (limit up to 1000). `search` matches the start of the accession number |
 | `GET /jobs/{id}` | `jobs.view` | One job with its `events` and `runs` |
 | `POST /jobs/{id}/cancel` | own: `jobs.manage_own`; others': `jobs.manage_all` | Cancel. A running container is stopped within a few seconds |
-| `POST /jobs/{id}/retry?full=false` | as cancel | Retry a failed or cancelled job. Re-sends only, if just the delivery failed, unless `full=true`. `409` for other states |
+| `POST /jobs/{id}/retry?full=false` | as cancel | Retry a failed or cancelled job. Re-sends only, if just the delivery failed; otherwise continues at the failed step. `full=true` runs every step again. `409` for other states |
 
 ## Results
 

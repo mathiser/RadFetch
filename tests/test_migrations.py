@@ -1,7 +1,8 @@
 from radfetch import db, store
 
 ALL = ["0001_initial.sql", "0002_job_retry.sql", "0003_api_tokens.sql", "0004_run_image_digest.sql",
-       "0005_notifications.sql", "0006_users.sql", "0007_results.sql"]
+       "0005_notifications.sql", "0006_users.sql", "0007_results.sql",
+       "0008_flow_steps.sql"]
 
 
 def fresh(conn):

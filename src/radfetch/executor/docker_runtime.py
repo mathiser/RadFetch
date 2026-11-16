@@ -19,10 +19,11 @@ class DockerRuntime:
         self.client = docker.from_env()
 
     def start(self, spec: ContainerSpec) -> str:
-        volumes = {
-            str(self.s.host_path(spec.input_dir)): {"bind": "/input", "mode": "ro"},
-            str(self.s.host_path(spec.output_dir)): {"bind": "/output", "mode": "rw"},
-        }
+        volumes = {str(self.s.host_path(spec.output_dir)): {"bind": "/output", "mode": "rw"}}
+        if spec.input_dir is not None:
+            volumes[str(self.s.host_path(spec.input_dir))] = {"bind": spec.input_path, "mode": "ro"}
+        for container_path, host_dir in spec.extra_inputs.items():
+            volumes[str(self.s.host_path(host_dir))] = {"bind": container_path, "mode": "ro"}
         kwargs = {}
         environment = dict(spec.env)
         if spec.gpu and self.s.debug_fake_gpu:

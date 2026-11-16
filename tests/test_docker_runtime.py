@@ -140,3 +140,18 @@ def test_gpu_device_selection(settings):
     settings.gpu_device_ids = "1, 3"
     request = runtime.gpu_request()
     assert request["DeviceIDs"] == ["1", "3"] and request["Count"] == 0
+
+
+def test_earlier_step_output_is_mounted_read_only(docker_runtime, settings):
+    upstream = settings.runs_dir / "upstream" / "out"
+    upstream.mkdir(parents=True)
+    (upstream / "mask.nii").write_text("mask")
+    spec = spec_for(settings, ["sh", "-c", "cat /masks/mask.nii /dicom/series/a.dcm; touch /masks/x 2>/dev/null && exit 9; exit 0"])
+    spec.input_path = "/dicom"
+    spec.extra_inputs = {"/masks": upstream}
+    handle = docker_runtime.start(spec)
+    try:
+        assert wait(docker_runtime, handle) == 0
+        assert docker_runtime.logs(handle) == b"maskx"
+    finally:
+        docker_runtime.remove(handle)

@@ -126,7 +126,7 @@ class FakeRuntime:
 
     @staticmethod
     def write_result(spec: ContainerSpec) -> int:
-        n = sum(1 for _ in spec.input_dir.rglob("*.dcm"))
+        n = sum(1 for _ in spec.input_dir.rglob("*.dcm")) if spec.input_dir else 0
         (spec.output_dir / "result.txt").write_text(f"{n} instances")
         return 0
 
