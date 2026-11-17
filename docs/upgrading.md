@@ -4,9 +4,15 @@ How to upgrade is in [Administration](administration.md#upgrading): pull, then
 `docker compose up -d --build`. Database changes are applied automatically. This
 page lists the changes that need something from you, newest first.
 
+## LDAP, SAML and simple sign-in
+
+- Nothing changes until you configure them; see [Sign-in](sign-in.md).
+- `RADFETCH_OIDC_ROLE_MAP` and `RADFETCH_OIDC_DEFAULT_ROLE` are now `RADFETCH_GROUP_ROLE_MAP` and `RADFETCH_EXTERNAL_DEFAULT_ROLE`, shared by all directory sign-ins. The old names still work.
+- A single sign-on attempt is now tied to the browser that started it. A sign-in left half-way across a restart may need to be started again.
+
 ## Single sign-on and two-step sign-in
 
-- Nothing changes until you configure them; see [Single sign-on and two-step sign-in](sso.md).
+- Nothing changes until you configure them; see [Single sign-on and two-step sign-in](sign-in.md).
 - Usernames may now contain `@`, so that e-mail style names from an identity provider work.
 - With `RADFETCH_OIDC_ISSUER` set, `RADFETCH_PUBLIC_URL` becomes mandatory, and the interface is no longer open before the first account exists.
 

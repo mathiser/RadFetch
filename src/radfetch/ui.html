@@ -87,6 +87,7 @@
   .perm select { width: auto; padding: 2px 6px; }
   .pill { display: inline-block; background: var(--chip); border-radius: 999px; padding: 1px 8px; font-size: 12px; margin: 1px 4px 1px 0; white-space: nowrap; }
   #login { max-width: 360px; margin: 9vh auto; }
+  #login a:not(.ssobtn) { color: var(--accent-ink); }
   .ssobtn { display: block; text-align: center; padding: 8px 12px; border-radius: 6px; background: var(--accent); color: #fff; text-decoration: none; }
   .qr { background: #fff; display: inline-block; padding: 6px; border-radius: 6px; margin: 8px 0; }
   .qr svg { display: block; width: 168px; height: 168px; }
@@ -179,14 +180,20 @@ async function showLogin() {
   const code = el("input", { id: "login-code", autocomplete: "one-time-code", inputMode: "numeric", placeholder: "6 digits, or a recovery code" });
   const codeRow = el("div", { id: "login-code-row", hidden: true }, el("label", { htmlFor: "login-code" }, "Code from your authenticator app"), code);
   const tok = el("input", { id: "login-token", type: "password", autocomplete: "off" });
-  const form = el("form", { id: "login-form" },
-    el("label", { htmlFor: "login-user" }, "Username"), user,
+  // Simple sign-in: one shared password, no username. The username field stays one click away
+  // for the other accounts an administrator may have created.
+  const userRow = el("div", { id: "login-user-row", hidden: !!config.simple },
+    el("label", { htmlFor: "login-user" }, "Username"), user);
+  user.required = !config.simple;
+  const other = config.simple ? el("p", { className: "muted", style: "margin:10px 0 0" }, el("a", { href: "#", id: "login-other", onclick: (e) => {
+    e.preventDefault(); userRow.hidden = false; user.required = true; e.target.parentElement.remove(); user.focus(); } }, "Sign in with a username instead")) : "";
+  const form = el("form", { id: "login-form" }, userRow,
     el("label", { htmlFor: "login-pass" }, "Password"), pass, codeRow,
-    el("button", { className: "primary" }, "Sign in"));
+    el("button", { className: "primary" }, "Sign in"), other);
   form.onsubmit = async (e) => {
     e.preventDefault();
     setToken(null);
-    const body = { username: user.value, password: pass.value };
+    const body = { username: userRow.hidden ? "" : user.value, password: pass.value };
     if (!codeRow.hidden && code.value.trim()) body.code = code.value.trim();
     try {
       const r = await fetch("/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -198,10 +205,11 @@ async function showLogin() {
   };
   const tform = el("form", {}, el("label", { htmlFor: "login-token" }, "API token"), tok, el("button", { className: "primary" }, "Use token"));
   tform.onsubmit = async (e) => { e.preventDefault(); setToken(tok.value.trim()); try { await start(); } catch (err) { setToken(null); toast("That token was not accepted.", "bad"); } };
-  const ssoButton = config.sso ? el("a", { id: "sso-button", href: "/auth/oidc/login", className: "ssobtn" }, config.sso_label) : "";
+  const providers = config.providers || [];
+  const buttons = providers.map((p, i) => el("a", { id: i ? `sso-button-${i}` : "sso-button", href: p.url, className: "ssobtn", style: i ? "margin-top:8px" : "" }, p.label));
   $("main").replaceChildren(el("div", { id: "login" },
-    el("section", {}, el("h2", {}, "Sign in to RadFetch"), ssoButton,
-      config.sso && config.password_login ? el("p", { className: "muted", style: "margin:14px 0 2px" }, "or with a RadFetch account") : "",
+    el("section", {}, el("h2", {}, "Sign in to RadFetch"), ...buttons,
+      providers.length && config.password_login ? el("p", { className: "muted", style: "margin:14px 0 2px" }, "or with a username and password") : "",
       config.password_login ? form : ""),
     el("details", { className: "data" }, el("summary", {}, "Sign in with an API token instead"), el("section", {}, tform))));
 }
@@ -503,12 +511,12 @@ const VIEWS = {
       el("td", {}, u.username), el("td", {}, u.role),
       el("td", { className: "wrap" }, ...u.grants.map((p) => el("span", { className: "pill" }, "+ " + p)), ...u.denies.map((p) => el("span", { className: "pill" }, "− " + p))),
       el("td", {}, u.allowed_flows ? u.allowed_flows.join(", ") || "none" : "all"),
-      el("td", { className: u.disabled ? "bad" : "" }, u.disabled ? "disabled" : u.sso ? "single sign-on" : u.has_password ? (u.totp_enabled ? "password + code" : "password") : "tokens only"),
+      el("td", { className: u.disabled ? "bad" : "" }, u.disabled ? "disabled" : u.sso ? "directory" : u.has_password ? (u.totp_enabled ? "password + code" : "password") : "tokens only"),
       el("td", { className: "num" }, num(u.tokens)), el("td", {}, when(u.last_login_at) || "never")));
     const nu = el("input", { id: "new-user", required: true, pattern: "[A-Za-z0-9][A-Za-z0-9._@\\-]{0,127}", autocomplete: "off" }), nr = roleSelect("viewer", "new-role");
     const svc = el("input", { type: "checkbox", id: "new-svc" }), viaSso = el("input", { type: "checkbox", id: "new-sso" });
     const create = el("form", { id: "user-form" }, el("label", { htmlFor: "new-user" }, "Username"), nu, el("label", { htmlFor: "new-role" }, "Role"), nr,
-      el("label", {}, viaSso, " Signs in with single sign-on (no password; the username must match the identity provider's)"),
+      el("label", {}, viaSso, " Signs in through the directory: single sign-on or LDAP (no password here; the username must match the directory's)"),
       el("label", {}, svc, " Service account (no password; used with API tokens only)"), el("button", { className: "primary" }, "Create user"));
     const secret = el("div", { id: "secret" });
     create.onsubmit = async (e) => {
@@ -584,12 +592,15 @@ const VIEWS = {
     if (me.sso) {
       mfa.append(el("p", { className: "muted" }, "You signed in with single sign-on. Its second factor is managed by your organisation's sign-in service."));
     } else if (me.mfa_enabled) {
-      const pwd = el("input", { type: "password", id: "mfa-pw", autocomplete: "current-password", placeholder: "Your password" });
+      // Proof before turning it off: the RadFetch password, or for a directory account a current code.
+      const pwd = me.has_password
+        ? el("input", { type: "password", id: "mfa-pw", autocomplete: "current-password", placeholder: "Your password" })
+        : el("input", { id: "mfa-pw", inputMode: "numeric", autocomplete: "one-time-code", placeholder: "Current code from the app" });
       mfa.append(el("p", {}, "On. Signing in needs a code from your authenticator app."),
         el("p", { className: "muted" }, "Lost the app? Use a recovery code to sign in, then set it up again here. An administrator can also reset it."),
         el("button", { id: "mfa-setup", className: "small", onclick: () => mfaSetup(mfa) }, "Set up again (new app or phone)"));
       if (!me.mfa_required_by_policy) mfa.append(el("div", { className: "bar", style: "margin-top:12px" }, pwd,
-        el("button", { className: "small danger", onclick: () => act(async () => { await post("/me/mfa/remove", { password: pwd.value }); me = await api("/whoami"); }, "Two-step sign-in removed.") }, "Turn off")));
+        el("button", { className: "small danger", onclick: () => act(async () => { await post("/me/mfa/remove", me.has_password ? { password: pwd.value } : { code: pwd.value }); me = await api("/whoami"); }, "Two-step sign-in removed.") }, "Turn off")));
     } else {
       mfa.append(el("p", { className: me.mfa_setup_required ? "bad" : "" }, me.mfa_setup_required
         ? "Two-step sign-in is required here. Set it up to continue."
@@ -601,7 +612,7 @@ const VIEWS = {
       mfa,
       el("section", {}, el("h2", {}, "Your access"), el("p", {}, `Signed in as ${me.name}, role ${me.role}.`), el("p", { className: "muted" }, me.allowed_flows ? "Limited to flows: " + (me.allowed_flows.join(", ") || "none") : "All flows."),
         el("div", {}, ...me.permissions.map((p) => el("span", { className: "pill" }, p)))),
-      me.sso ? "" : el("section", {}, el("h2", {}, "Password"), pw),
+      me.sso || !me.has_password ? "" : el("section", {}, el("h2", {}, "Password"), pw),
       el("section", {}, el("h2", {}, "API tokens"), el("p", { className: "muted" }, "A token acts with your rights, for scripts and other programs."), list, make, secret))];
   },
 };

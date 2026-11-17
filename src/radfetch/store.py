@@ -1335,6 +1335,30 @@ def check_login(
     return get_user(conn, username), "ok"
 
 
+def has_local_password(conn: Conn, username: str) -> bool:
+    row = conn.execute("select password_hash is not null as yes from users where username = %s", (username,)).fetchone()
+    return bool(row and row["yes"])
+
+
+def ensure_simple_admin(conn: Conn, password: str) -> None:
+    """Simple sign-in: keep the built-in account "admin" in step with the configured password."""
+    with conn.transaction():
+        conn.execute("select pg_advisory_xact_lock(727002)")
+        row = conn.execute("select * from users where username = 'admin' for update").fetchone()
+        if row is None:
+            create_user(conn, "admin", "admin", auth.hash_password(password), by="simple sign-in")
+        elif not auth.verify_password(password, row["password_hash"]) or row["role"] != "admin" or row["disabled"]:
+            conn.execute(
+                "update users set password_hash = %s, role = 'admin', disabled = false, failed_logins = 0,"
+                " locked_until = null where id = %s",
+                (auth.hash_password(password), row["id"]),
+            )
+            log_event(conn, None, "user_changed", username="admin", changes={"password": "changed"}, by="simple sign-in")
+        else:
+            # A restart is the obvious thing to try when locked out of a one-password set-up: let it work.
+            conn.execute("update users set failed_logins = 0, locked_until = null where id = %s", (row["id"],))
+
+
 def totp_begin(conn: Conn, username: str) -> str:
     """Start (or restart) setting up two-step sign-in. It takes effect only once confirmed with a code."""
     secret = auth.totp_new_secret()

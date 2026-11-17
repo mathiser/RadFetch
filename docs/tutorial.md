@@ -142,8 +142,10 @@ Both steps here are CPU steps, so the CPU executors run them.
 
 ## 7. Create accounts
 
-Until an account exists, anyone who can reach the interface can use it. Create
-an administrator:
+Until some way of signing in is set up, anyone who can reach the interface can
+use it. For a small set-up, one shared password in `.env` is enough
+(`RADFETCH_SIMPLE_PASSWORD`, see [Sign-in](sign-in.md)). Here, create an
+administrator account instead:
 
 ```bash
 docker compose exec api radfetch user create me --role admin

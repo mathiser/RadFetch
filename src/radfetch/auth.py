@@ -62,6 +62,7 @@ class Principal:
     allowed_flows: frozenset[str] | None = None  # None: every flow
     user_id: str | None = None
     sso: bool = False  # this sign-in came through the identity provider
+    has_password: bool = True  # False for accounts whose password lives in a directory
     mfa_enabled: bool = False
     # Two-step sign-in is mandatory and this password account has not set it up yet:
     # until it has, the account can do nothing else.

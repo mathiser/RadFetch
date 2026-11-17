@@ -22,8 +22,10 @@ import uuid
 from contextlib import asynccontextmanager
 from importlib import resources
 from collections.abc import Callable, Iterator
+from urllib.parse import parse_qs, urlsplit
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 import segno
 from psycopg.errors import UniqueViolation
@@ -31,9 +33,12 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
-from radfetch import auth, store
-from radfetch.sso import MESSAGES as SSO_MESSAGES
-from radfetch.sso import Oidc, SsoError
+from radfetch import auth, directory, store
+from radfetch.directory import MESSAGES as SSO_MESSAGES
+from radfetch.directory import SignInError as SsoError
+from radfetch.ldap_auth import Ldap
+from radfetch.saml import Saml
+from radfetch.sso import Oidc
 from radfetch.auth import Principal
 from radfetch.config import BATCH_PRIORITY, Settings
 from radfetch.flows import FlowError, list_flows, load_flow
@@ -41,6 +46,9 @@ from radfetch.flows import FlowError, list_flows, load_flow
 log = logging.getLogger("radfetch.api")
 
 SESSION_COOKIE = "radfetch_session"
+# Ties a single sign-on attempt to the browser that started it, so that nobody can finish their
+# own sign-in in someone else's browser (login CSRF) and collect what that person then types.
+SIGNIN_COOKIE = "radfetch_signin"
 USERNAME = auth.USERNAME_PATTERN
 
 
@@ -56,7 +64,7 @@ class BatchIn(BaseModel):
 
 
 class LoginIn(BaseModel):
-    username: str
+    username: str = ""  # may be left out with simple sign-in, where everyone is "admin"
     password: str
     code: str | None = None  # authenticator or recovery code, when the account has two-step sign-in
 
@@ -66,7 +74,8 @@ class CodeIn(BaseModel):
 
 
 class MfaRemoveIn(BaseModel):
-    password: str
+    password: str = ""  # for accounts with a RadFetch password
+    code: str = ""  # for accounts whose password lives in a directory: a current authenticator code
 
 
 class UserIn(BaseModel):
@@ -100,7 +109,8 @@ class TokenIn(BaseModel):
     name: str | None = Field(default=None, pattern=USERNAME)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, ldap_connect=None) -> FastAPI:
+    """`ldap_connect` replaces the real LDAP connection, for tests."""
     settings = settings or Settings()
     pool = ConnectionPool(
         settings.database_url, min_size=1, max_size=4, open=False, kwargs={"autocommit": True, "row_factory": dict_row}
@@ -109,6 +119,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         pool.open()
+        if settings.simple_password:
+            with pool.connection() as conn:
+                store.ensure_simple_admin(conn, settings.simple_password)
         yield
         pool.close()
 
@@ -118,14 +131,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with pool.connection() as conn:
             yield conn
 
-    oidc = Oidc(settings)
-    oidc.check_config()
+    # Every way of signing in is checked at start, so a set-up that cannot work, or that would
+    # expose passwords, stops here instead of at the first sign-in.
+    oidc, saml, ldap = Oidc(settings), Saml(settings), Ldap(settings, ldap_connect)
+    for method in (oidc, saml, ldap):
+        method.check_config()
+    directory.role_map(settings)
+    directory.default_role(settings)
+    if settings.simple_password is not None and len(settings.simple_password) < auth.MIN_PASSWORD_LENGTH:
+        raise ValueError(f"RADFETCH_SIMPLE_PASSWORD must be at least {auth.MIN_PASSWORD_LENGTH} characters")
+    providers = [
+        {"label": label, "url": url}
+        for on, label, url in (
+            (oidc.enabled, settings.oidc_button_label, "/auth/oidc/login"),
+            (saml.enabled, settings.saml_button_label, "/auth/saml/login"),
+        )
+        if on
+    ]
 
     # --- who is asking -----------------------------------------------------------------
 
     def auth_enabled(conn) -> bool:
         # With single sign-on configured the API is never open, even before the first person has signed in.
-        return settings.api_token is not None or oidc.enabled or store.users_exist(conn)
+        return (
+            settings.api_token is not None
+            or bool(providers)
+            or ldap.enabled
+            or bool(settings.simple_password)
+            or store.users_exist(conn)
+        )
 
     def signed_in(
         authorization: str | None = Header(None),
@@ -148,7 +182,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # A person who signed in with a password must have a second factor when that is the rule.
                 # Single sign-on leaves the second factor to the identity provider.
                 must_set_up = settings.require_mfa and not user["session_sso"] and not user["totp_enabled"]
-                return dataclasses.replace(principal, sso=user["session_sso"], mfa_setup_required=must_set_up)
+                return dataclasses.replace(
+                    principal, sso=user["session_sso"], mfa_setup_required=must_set_up, has_password=user["has_password"]
+                )
         elif not auth_enabled(conn):
             return Principal(x_remote_user, "operator", auth.ROLES["operator"])  # open mode
         raise HTTPException(401, "not signed in", headers={"WWW-Authenticate": "Bearer"})
@@ -222,6 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "mfa_enabled": user.mfa_enabled,
             "mfa_setup_required": user.mfa_setup_required,
             "mfa_required_by_policy": settings.require_mfa,
+            "has_password": user.has_password,
         }
 
     # --- UI and sign-in ----------------------------------------------------------------
@@ -250,19 +287,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def auth_config():
         """What the sign-in screen should offer. Open to everyone."""
         return {
-            "sso": oidc.enabled,
-            "sso_label": settings.oidc_button_label,
-            "password_login": settings.password_login or not oidc.enabled,
+            "providers": providers,  # single sign-on buttons
+            "sso": bool(providers),
+            # the username-and-password form: RadFetch accounts, and directory accounts over LDAP
+            "password_login": settings.password_login or ldap.enabled or not providers,
+            "simple": bool(settings.simple_password),  # one shared password, no username
             "messages": SSO_MESSAGES,
         }
 
     @app.post("/auth/login")
     def login(body: LoginIn, response: Response, conn=Depends(db)):
-        if oidc.enabled and not settings.password_login:
+        username = body.username.strip() or ("admin" if settings.simple_password else "")
+        local = store.has_local_password(conn, username)
+        local_allowed = settings.password_login or not providers
+
+        if ldap.enabled and not local:
+            # A directory account. The directory checks the password; RadFetch never stores it.
+            try:
+                identity = ldap.authenticate(username, body.password)
+                account = directory.admit(conn, settings, identity.subject, identity.username, identity.groups) \
+                    if identity else None
+            except SsoError as exc:
+                log.warning("LDAP sign-in refused (%s): %s", exc.code, exc)
+                store.log_event(conn, None, "sso_refused", reason=exc.code, via="ldap")
+                raise HTTPException(503 if exc.code == "provider" else 403, SSO_MESSAGES[exc.code]) from exc
+            # Lock-out, disabling and the second factor are RadFetch's, whoever checked the password.
+            user, reason = store.check_login(
+                conn, account["username"] if account else username, lambda _stored: account is not None, body.code
+            )
+        elif local and not local_allowed:
             raise HTTPException(403, "password sign-in is turned off; use single sign-on")
-        user, reason = store.check_login(
-            conn, body.username, lambda stored: auth.verify_password(body.password, stored), body.code
-        )
+        else:
+            user, reason = store.check_login(
+                conn, username, lambda stored: auth.verify_password(body.password, stored), body.code
+            )
         if reason == "mfa_required":
             # The password was right; ask for the code. Nothing is signed in yet.
             return JSONResponse({"detail": "enter the code from your authenticator app", "mfa_required": True}, 401)
@@ -271,33 +329,107 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 401,
                 "that code is not right" if reason == "mfa_bad"
+                else "wrong password, or sign-in is locked for a while" if settings.simple_password and not body.username
                 else "wrong username or password, or the account is locked or disabled",
             )
         start_session(response, conn, user)
         return {**describe(auth.principal_for(user), conn),
                 "mfa_setup_required": settings.require_mfa and not user["totp_enabled"]}
 
+    https = settings.public_url.lower().startswith("https://")
+
+    def remember_attempt(response: Response, url: str, key: str, posted_back: bool) -> Response:
+        """Store the attempt's state in a cookie of the browser that started it.
+
+        OpenID Connect returns with a top-level GET, which carries a SameSite=Lax cookie. SAML
+        returns with a cross-site POST, which carries only a SameSite=None cookie, and browsers
+        accept those only with Secure, that is over HTTPS.
+        """
+        state = parse_qs(urlsplit(url).query)[key][0]
+        response.set_cookie(
+            SIGNIN_COOKIE, state, max_age=600, path="/auth", httponly=True, secure=https,
+            samesite="none" if posted_back and https else "lax",
+        )
+        return response
+
+    def check_attempt(cookie: str | None, state: str, posted_back: bool) -> None:
+        if cookie is None:
+            if posted_back and not https:
+                return  # plain-HTTP SAML (development only): the browser cannot carry the cookie back
+            raise SsoError("state", "this browser did not start this sign-in")
+        if not secrets.compare_digest(cookie, state):
+            raise SsoError("state", "this browser started a different sign-in")
+
+    def refuse(conn, exc: SsoError, via: str) -> RedirectResponse:
+        log.warning("%s sign-in refused (%s): %s", via, exc.code, exc)
+        store.log_event(conn, None, "sso_refused", reason=exc.code, via=via)
+        response = RedirectResponse(f"/?sso_error={exc.code}", 303)
+        response.delete_cookie(SIGNIN_COOKIE, path="/auth")
+        return response
+
+    def signed_in_redirect(conn, user) -> RedirectResponse:
+        response = RedirectResponse("/", 303)
+        response.delete_cookie(SIGNIN_COOKIE, path="/auth")
+        start_session(response, conn, user, sso=True)
+        return response
+
+    @app.get("/auth/saml/metadata", include_in_schema=False)
+    def saml_metadata():
+        """RadFetch's SAML metadata, to register it at the identity provider."""
+        if not saml.enabled:
+            raise HTTPException(404, "SAML is not set up")
+        return Response(saml.sp_metadata(), media_type="application/samlmetadata+xml")
+
+    @app.get("/auth/saml/login", include_in_schema=False)
+    def saml_login(conn=Depends(db)):
+        try:
+            url = saml.begin(conn)
+        except SsoError as exc:
+            return refuse(conn, exc, "saml")
+        return remember_attempt(RedirectResponse(url, 302), url, "RelayState", posted_back=True)
+
+    @app.post("/auth/saml/acs", include_in_schema=False)
+    async def saml_acs(request: Request):
+        """Where the identity provider posts its signed answer."""
+        form = parse_qs((await request.body()).decode("utf-8", "replace"))
+        answer, relay = form.get("SAMLResponse", [""])[0], form.get("RelayState", [""])[0]
+        cookie = request.cookies.get(SIGNIN_COOKIE)
+
+        def finish():
+            with pool.connection() as conn:
+                try:
+                    check_attempt(cookie, relay, posted_back=True)
+                    user = saml.sign_in(conn, answer, relay)
+                except SsoError as exc:
+                    return refuse(conn, exc, "saml")
+                return signed_in_redirect(conn, user)
+
+        return await run_in_threadpool(finish)
+
     @app.get("/auth/oidc/login", include_in_schema=False)
     def oidc_login(conn=Depends(db)):
         try:
-            return RedirectResponse(oidc.begin(conn), 302)
+            url = oidc.begin(conn)
         except SsoError as exc:
-            log.warning("single sign-on could not start: %s", exc)
-            return RedirectResponse(f"/?sso_error={exc.code}", 303)
+            return refuse(conn, exc, "oidc")
+        return remember_attempt(RedirectResponse(url, 302), url, "state", posted_back=False)
 
     @app.get("/auth/oidc/callback", include_in_schema=False)
-    def oidc_callback(code: str = "", state: str = "", error: str = "", conn=Depends(db)):
+    def oidc_callback(
+        code: str = "",
+        state: str = "",
+        error: str = "",
+        cookie: str | None = Cookie(None, alias=SIGNIN_COOKIE),
+        conn=Depends(db),
+    ):
         try:
             if error or not code:
                 raise SsoError("denied", error)
+            check_attempt(cookie, state, posted_back=False)
             user = oidc.sign_in(conn, code, state)
         except SsoError as exc:
-            log.warning("single sign-on refused (%s): %s", exc.code, exc)
-            store.log_event(conn, None, "sso_refused", reason=exc.code)
-            return RedirectResponse(f"/?sso_error={exc.code}", 303)
-        response = RedirectResponse("/", 303)
-        start_session(response, conn, user, sso=True)
-        return response
+            return refuse(conn, exc, "oidc")
+        return signed_in_redirect(conn, user)
 
     @app.post("/auth/logout")
     def logout(response: Response, session: str | None = Cookie(None, alias=SESSION_COOKIE), conn=Depends(db)):
@@ -375,11 +507,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         name = real_user(user)
         if settings.require_mfa:
             raise HTTPException(409, "two-step sign-in is mandatory here; set it up again instead of removing it")
-        ok, _ = store.check_login(
-            conn, name, lambda stored: auth.verify_password(body.password, stored), second_factor=False
-        )
-        if not ok:
-            raise HTTPException(403, "the password is wrong")
+        if user.has_password:
+            ok, _ = store.check_login(
+                conn, name, lambda stored: auth.verify_password(body.password, stored), second_factor=False
+            )
+            if not ok:
+                raise HTTPException(403, "the password is wrong")
+        else:
+            # No RadFetch password to ask for: prove possession of the authenticator instead.
+            ok, _ = store.check_login(conn, name, lambda _stored: True, body.code or "-")
+            if not ok:
+                raise HTTPException(403, "that code is not right")
         return {"removed": store.totp_disable(conn, name, by=name)}
 
     @app.get("/me/tokens")

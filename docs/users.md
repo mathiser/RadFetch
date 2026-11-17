@@ -69,9 +69,10 @@ identifiers in them.
 
 ## The first administrator
 
-Until the first account exists, the interface and API are open to anyone who can
-reach them, with operator rights. Create an administrator before making the
-service reachable from other machines:
+Until the first account exists (and no other way of signing in is set up), the
+interface and API are open to anyone who can reach them, with operator rights.
+Create an administrator before making the service reachable from other machines,
+or use [simple sign-in](sign-in.md#simple-sign-in):
 
 ```bash
 docker compose exec api radfetch user create anna --role admin
@@ -151,10 +152,9 @@ run commands on the host is in effect an administrator.
 
 ## Signing in
 
-- **Password accounts** sign in with username and password, optionally (or mandatorily) with a code from an authenticator app.
-- **Single sign-on** lets people use your organisation's identity provider; their role can follow their directory groups.
-
-Both are described in [Single sign-on and two-step sign-in](sso.md).
+How people sign in (a shared password for small set-ups, RadFetch passwords,
+LDAP, OpenID Connect or SAML, and two-step sign-in) is described in
+[Sign-in](sign-in.md).
 
 Sessions are a cookie that is `HttpOnly` and `SameSite=Strict`, and marked
 `Secure` when `RADFETCH_PUBLIC_URL` starts with `https://`. Serve the interface

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -18,19 +17,17 @@ from urllib.parse import urlencode
 import httpx
 import jwt
 
-from radfetch import auth, store
+from radfetch import directory, store
 from radfetch.config import Settings
+from radfetch.directory import MESSAGES, SignInError
+
+__all__ = ["MESSAGES", "Oidc", "SsoError"]
 
 # Asymmetric algorithms only: with these, nobody holding just the client secret can mint a token.
 ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"]
 
 
-class SsoError(Exception):
-    """Sign-in through the provider did not succeed. `code` is safe to show to the person."""
-
-    def __init__(self, code: str, detail: str = ""):
-        super().__init__(detail or code)
-        self.code = code
+SsoError = SignInError  # the name this module used before SAML and LDAP shared it
 
 
 @dataclass(frozen=True)
@@ -38,21 +35,6 @@ class Identity:
     subject: str  # issuer|sub: unique and stable for a person
     username: str
     groups: list[str]
-
-
-MESSAGES = {
-    "not_configured": "Single sign-on is not set up.",
-    "provider": "The identity provider could not be reached or answered unexpectedly.",
-    "state": "This sign-in attempt has expired or was already used. Please try again.",
-    "token": "The identity provider's answer could not be verified.",
-    "mfa": "Sign-in was refused because a second factor is required and the identity provider did not confirm one.",
-    "username": "The identity provider did not supply a usable username.",
-    "username_taken": "An account with your username already exists and is not set up for single sign-on. "
-    "Ask an administrator.",
-    "not_authorized": "You are signed in at the identity provider, but you have not been given access to RadFetch.",
-    "disabled": "Your RadFetch account is disabled.",
-    "denied": "Sign-in was cancelled or refused at the identity provider.",
-}
 
 
 class Oidc:
@@ -71,24 +53,12 @@ class Oidc:
     def redirect_uri(self) -> str:
         return self.s.public_url.rstrip("/") + "/auth/oidc/callback"
 
-    def role_map(self) -> dict[str, str]:
-        if not self.s.oidc_role_map.strip():
-            return {}
-        mapping = json.loads(self.s.oidc_role_map)
-        unknown = sorted(set(mapping.values()) - set(auth.ROLES))
-        if unknown:
-            raise ValueError(f"RADFETCH_OIDC_ROLE_MAP names unknown role(s): {', '.join(unknown)}")
-        return mapping
-
     def check_config(self) -> None:
         """Raise ValueError early for a set-up that cannot work."""
         if not self.enabled:
             return
         if not self.s.public_url:
             raise ValueError("RADFETCH_PUBLIC_URL must be set for single sign-on: the provider redirects back to it")
-        self.role_map()
-        if self.s.oidc_default_role and self.s.oidc_default_role not in auth.ROLES:
-            raise ValueError(f"RADFETCH_OIDC_DEFAULT_ROLE is not a role: {self.s.oidc_default_role}")
 
     # --- provider metadata -----------------------------------------------------------------
 
@@ -180,33 +150,15 @@ class Oidc:
             raise SsoError("mfa", f"acr is {claims.get('acr')}")
 
         username = str(claims.get(self.s.oidc_username_claim) or "").strip()
-        if not auth.valid_username(username):
-            raise SsoError("username", f"claim {self.s.oidc_username_claim} is {username!r}")
         groups = claims.get(self.s.oidc_groups_claim) or []
         if isinstance(groups, str):
             groups = [groups]
         return Identity(f"{doc['issuer']}|{claims['sub']}", username, [str(g) for g in groups])
 
-    def role_for(self, groups: list[str]) -> str | None:
-        """The highest role any of the person's groups maps to."""
-        order = list(auth.ROLES)
-        roles = [role for group, role in self.role_map().items() if group in groups]
-        return max(roles, key=order.index) if roles else None
-
     def sign_in(self, conn: store.Conn, code: str, state: str):
         """The whole second half: returns the RadFetch account row for the authenticated person."""
         identity = self.complete(conn, code, state)
-        try:
-            return store.sso_sign_in(
-                conn,
-                identity.subject,
-                identity.username,
-                self.role_for(identity.groups),
-                self.s.oidc_default_role or None,
-            )
-        except ValueError as exc:
-            code_ = str(exc) if str(exc) in MESSAGES else "not_authorized"
-            raise SsoError(code_) from exc
+        return directory.admit(conn, self.s, identity.subject, identity.username, identity.groups)
 
     def logout_url(self) -> str | None:
         """Where to send the browser to also sign out at the provider, if it offers that."""

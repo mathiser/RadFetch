@@ -12,8 +12,9 @@ Jobs and batches of flows an account is not allowed to see behave as if they did
 | Method and path | Needs | Does |
 |---|---|---|
 | `GET /auth/config` | | Whether single sign-on and password sign-in are offered |
-| `POST /auth/login` | | Body `{"username", "password", "code"?}`. Sets the session cookie. `401` with `"mfa_required": true` means the password was right and a code is needed |
-| `GET /auth/oidc/login` | | Starts single sign-on: redirects the browser to the identity provider |
+| `POST /auth/login` | | Body `{"username", "password", "code"?}`; with simple sign-in `username` may be left out. Also checks LDAP accounts. Sets the session cookie. `401` with `"mfa_required": true` means the password was right and a code is needed |
+| `GET /auth/oidc/login`, `GET /auth/saml/login` | | Start single sign-on: redirect the browser to the identity provider |
+| `GET /auth/saml/metadata` | | RadFetch's SAML metadata, for registering it at the provider |
 | `POST /me/mfa/setup`, `POST /me/mfa/confirm`, `POST /me/mfa/remove` | signed in | Set up two-step sign-in (returns secret and QR code), confirm it with a code (returns recovery codes), remove it (needs the password) |
 | `POST /auth/logout` | | Ends the session |
 | `GET /whoami` | signed in | Name, role, effective permissions, allowed flows |

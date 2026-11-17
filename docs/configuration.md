@@ -83,14 +83,27 @@ Flows are configured separately, in `flows/*.yaml`: see [Writing flows](flows.md
 |---|---|---|
 | `RADFETCH_API_TOKEN` | none | One shared token with operator rights, outside the accounts |
 | `RADFETCH_SESSION_HOURS` | `12` | How long a sign-in in the web interface lasts |
-| `RADFETCH_REQUIRE_MFA` | `false` | Password accounts must set up two-step sign-in before they can do anything |
-| `RADFETCH_PASSWORD_LOGIN` | `true` | Whether password sign-in is offered next to single sign-on |
-| `RADFETCH_OIDC_ISSUER` | empty (off) | Issuer URL of the identity provider; turns single sign-on on |
+| `RADFETCH_SIMPLE_PASSWORD` | none | One shared password; signs in as the built-in `admin`. For small set-ups |
+| `RADFETCH_REQUIRE_MFA` | `false` | Password sign-ins must set up two-step sign-in before they can do anything |
+| `RADFETCH_PASSWORD_LOGIN` | `true` | Whether the RadFetch password form is offered next to single sign-on |
+| `RADFETCH_GROUP_ROLE_MAP` | empty | JSON object mapping directory groups to roles, for LDAP, OpenID Connect and SAML |
+| `RADFETCH_EXTERNAL_DEFAULT_ROLE` | empty | Role for directory people in no mapped group; empty refuses them |
+| `RADFETCH_LDAP_URL` | empty (off) | `ldaps://host:636`, or `ldap://` with StartTLS. Turns LDAP sign-in on |
+| `RADFETCH_LDAP_START_TLS`, `RADFETCH_LDAP_CA_FILE`, `RADFETCH_LDAP_ALLOW_INSECURE` | `false`, none, `false` | Encryption; see [Sign-in](sign-in.md#encryption) |
+| `RADFETCH_LDAP_BIND_DN`, `RADFETCH_LDAP_BIND_PASSWORD` | empty | Service account that looks people up |
+| `RADFETCH_LDAP_USER_BASE`, `RADFETCH_LDAP_USER_FILTER` | empty, `(sAMAccountName={username})` | Where and how people are found |
+| `RADFETCH_LDAP_USER_DN_TEMPLATE` | empty | Without a service account: whom to bind as, e.g. `{username}@hospital.example` |
+| `RADFETCH_LDAP_USERNAME_ATTRIBUTE`, `RADFETCH_LDAP_GROUPS_ATTRIBUTE` | `sAMAccountName`, `memberOf` | Attributes read from the person |
+| `RADFETCH_LDAP_GROUP_BASE`, `RADFETCH_LDAP_GROUP_FILTER` | empty, `(member={user_dn})` | Optional group search (OpenLDAP, nested AD groups) |
+| `RADFETCH_LDAP_TIMEOUT_S` | `10` | Seconds to wait for the directory |
+| `RADFETCH_OIDC_ISSUER` | empty (off) | Issuer URL of the OpenID Connect provider; turns it on |
 | `RADFETCH_OIDC_CLIENT_ID`, `RADFETCH_OIDC_CLIENT_SECRET` | | RadFetch's registration at the provider |
-| `RADFETCH_OIDC_ROLE_MAP` | empty | JSON object mapping directory groups to roles |
-| `RADFETCH_OIDC_DEFAULT_ROLE` | empty | Role for people in no mapped group; empty refuses them |
 | `RADFETCH_OIDC_REQUIRE_AMR`, `RADFETCH_OIDC_REQUIRE_ACR`, `RADFETCH_OIDC_ACR_VALUES` | empty | Insist that the provider used a second factor |
-| `RADFETCH_OIDC_USERNAME_CLAIM`, `RADFETCH_OIDC_GROUPS_CLAIM`, `RADFETCH_OIDC_SCOPES`, `RADFETCH_OIDC_BUTTON_LABEL` | see [Single sign-on](sso.md) | Adjustments for the provider |
+| `RADFETCH_OIDC_USERNAME_CLAIM`, `RADFETCH_OIDC_GROUPS_CLAIM`, `RADFETCH_OIDC_SCOPES`, `RADFETCH_OIDC_BUTTON_LABEL` | see [Sign-in](sign-in.md#openid-connect) | Adjustments for the provider |
+| `RADFETCH_SAML_IDP_METADATA` | empty (off) | URL or file of the SAML provider's metadata; turns SAML on |
+| `RADFETCH_SAML_USERNAME_ATTRIBUTE`, `RADFETCH_SAML_GROUPS_ATTRIBUTE` | NameID, `groups` | Where the username and groups come from |
+| `RADFETCH_SAML_REQUIRE_AUTHN_CONTEXT` | empty | Insist on an authentication context (a second factor) |
+| `RADFETCH_SAML_ENTITY_ID`, `RADFETCH_SAML_BUTTON_LABEL` | see [Sign-in](sign-in.md#saml-20) | Adjustments |
 | `RADFETCH_NOTIFY_WEBHOOK_URL` | empty (off) | Where to POST notifications |
 | `RADFETCH_NOTIFY_INCLUDE_IDENTIFIERS` | `false` | Include accession numbers and error text in notifications |
 | `RADFETCH_PUBLIC_URL` | empty | Address of the web interface. Added as a link in notifications; when it starts with `https://`, session cookies are marked secure |

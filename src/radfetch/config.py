@@ -109,6 +109,58 @@ class Settings(BaseSettings):
     # Password accounts must set up two-step sign-in (an authenticator app) before they can do anything.
     require_mfa: bool = False
 
+    # --- Simple sign-in for small set-ups --------------------------------------------
+    # One shared password. When set, the sign-in page asks only for this password and signs
+    # people in as the built-in administrator "admin". No accounts need to be created.
+    simple_password: str | None = None
+
+    # --- Roles for people who sign in through a directory (OpenID Connect, SAML, LDAP) ----
+    # JSON object mapping a directory group to a role, e.g. {"radfetch-admins": "admin",
+    # "radiology": "viewer"}. With several matches the highest role wins. When set, the role
+    # is taken from the directory at every sign-in. For LDAP a key may be a group's full DN
+    # or just its CN.
+    group_role_map: str = ""
+    # Role for people who match no group. Empty: they are refused, unless an administrator
+    # created an account for them beforehand.
+    external_default_role: str = ""
+
+    # --- LDAP / Active Directory sign-in ----------------------------------------------
+    # e.g. ldaps://dc1.hospital.example:636. Setting it lets people sign in on the normal
+    # form with their directory username and password.
+    ldap_url: str = ""
+    ldap_start_tls: bool = False  # upgrade an ldap:// connection to TLS before sending anything
+    ldap_ca_file: Path | None = None
+    # ldap:// without TLS sends passwords in clear text and is refused unless this is set.
+    ldap_allow_insecure: bool = False
+    # Either: a service account that looks the person up, then their password is checked ...
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str | None = None
+    ldap_user_base: str = ""
+    ldap_user_filter: str = "(sAMAccountName={username})"
+    # ... or: no service account; bind directly as this name, e.g. "{username}@hospital.example"
+    # (Active Directory) or "uid={username},ou=people,dc=example,dc=org".
+    ldap_user_dn_template: str = ""
+    ldap_username_attribute: str = "sAMAccountName"  # becomes the RadFetch username, when present
+    ldap_groups_attribute: str = "memberOf"
+    # Optionally also search for the person's groups, for directories without memberOf (OpenLDAP)
+    # or to include nested groups in Active Directory with the filter
+    # (member:1.2.840.113556.1.4.1941:={user_dn}).
+    ldap_group_base: str = ""
+    ldap_group_filter: str = "(member={user_dn})"
+    ldap_timeout_s: float = 10
+
+    # --- Single sign-on (SAML 2.0) ------------------------------------------------------
+    # URL or file path of the identity provider's metadata XML. Setting it turns SAML on.
+    saml_idp_metadata: str = ""
+    # How RadFetch names itself to the provider. Default: <public_url>/auth/saml/metadata
+    saml_entity_id: str = ""
+    saml_username_attribute: str = ""  # empty: the NameID
+    saml_groups_attribute: str = "groups"
+    saml_button_label: str = "Sign in with single sign-on"
+    # Refuse sign-ins unless the provider states this authentication context, e.g.
+    # http://schemas.microsoft.com/claims/multipleauthn (ADFS, when a second factor was used).
+    saml_require_authn_context: str = ""
+
     # --- Single sign-on (OpenID Connect) -----------------------------------------
     # Issuer URL of the identity provider; its /.well-known/openid-configuration is read from there.
     # Setting it turns single sign-on on. public_url must be set too: the provider sends people
@@ -121,12 +173,8 @@ class Settings(BaseSettings):
     # Which claim becomes the username, and which lists the person's groups.
     oidc_username_claim: str = "preferred_username"
     oidc_groups_claim: str = "groups"
-    # JSON object mapping a group to a role, e.g. {"radfetch-admins": "admin", "radiology": "viewer"}.
-    # With several matches the highest role wins. When set, the role is taken from the
-    # provider at every sign-in.
+    # Older names for group_role_map and external_default_role; still read if those are empty.
     oidc_role_map: str = ""
-    # Role for people who match no group. Empty: they are refused, unless an administrator
-    # created an account for them beforehand.
     oidc_default_role: str = ""
     # Refuse single sign-on unless the provider says a second factor was used: a value that must
     # be in the token's "amr" claim (usually "mfa"), and/or an exact "acr" value.

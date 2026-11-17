@@ -88,7 +88,7 @@ def provider(settings):
     p = Provider(port)
     settings.public_url = "http://testserver"
     settings.oidc_issuer, settings.oidc_client_id, settings.oidc_client_secret = p.issuer, "radfetch", "s3cret"
-    settings.oidc_role_map = json.dumps({"radiology": "viewer", "ai-team": "operator", "radfetch-admins": "admin"})
+    settings.group_role_map = json.dumps({"radiology": "viewer", "ai-team": "operator", "radfetch-admins": "admin"})
     yield p
     p.stop()
 
@@ -114,8 +114,8 @@ def sso(client, tamper=None):
 
 def test_first_sign_in_creates_the_account_with_the_mapped_role(conn, client, provider):
     config = client.get("/auth/config").json()
-    assert (config["sso"], config["sso_label"], config["password_login"]) == (True, "Sign in with single sign-on", True)
-    assert "not_authorized" in config["messages"]
+    assert config["providers"] == [{"label": "Sign in with single sign-on", "url": "/auth/oidc/login"}]
+    assert config["password_login"] is True and "not_authorized" in config["messages"]
     assert sso(client) == "/"
     me = client.get("/whoami").json()
     assert (me["name"], me["role"], me["sso"]) == ("anna", "viewer", True)
@@ -162,7 +162,7 @@ def test_people_without_a_mapped_group_are_refused_unless_given_access(conn, set
 
 
 def test_default_role_admits_everyone_the_provider_knows(conn, settings, provider):
-    settings.oidc_default_role = "monitor"
+    settings.external_default_role = "monitor"
     provider.identity = {"sub": "u-3", "preferred_username": "cy@hospital.example", "groups": []}
     with TestClient(create_app(settings)) as client:
         assert sso(client) == "/"
@@ -242,7 +242,7 @@ def test_misconfiguration_is_caught_at_start(settings, provider):
     settings.public_url = ""
     with pytest.raises(ValueError, match="RADFETCH_PUBLIC_URL"):
         create_app(settings)
-    settings.public_url, settings.oidc_role_map = "http://testserver", '{"g": "emperor"}'
+    settings.public_url, settings.group_role_map = "http://testserver", '{"g": "emperor"}'
     with pytest.raises(ValueError, match="unknown role"):
         create_app(settings)
 
@@ -262,3 +262,13 @@ def test_the_only_administrator_is_not_demoted_by_a_group_change(conn, client, p
 def test_api_is_not_open_before_the_first_sign_in(conn, client):
     assert not store.users_exist(conn)
     assert client.get("/jobs").status_code == 401 and client.get("/whoami").status_code == 401
+
+
+def test_a_sign_in_cannot_be_finished_in_another_browser(conn, settings, provider):
+    """Login CSRF: an attacker signs in at the provider, then makes a colleague's browser open the callback."""
+    with TestClient(create_app(settings)) as attacker, TestClient(create_app(settings)) as victim:
+        to_provider = attacker.get("/auth/oidc/login", follow_redirects=False).headers["location"]
+        callback = urlsplit(httpx.get(to_provider, follow_redirects=False).headers["location"])
+        r = victim.get(f"/auth/oidc/callback?{callback.query}", follow_redirects=False)
+        assert r.headers["location"] == "/?sso_error=state"
+        assert victim.get("/whoami").status_code == 401
